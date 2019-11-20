@@ -774,7 +774,7 @@ public:
     ArrayVector<bool> keep, valid;
     Polyhedron pout(pin);
     ArrayVector<double> pn, pp, pv=pout.get_vertices();
-    std::vector<std::vector<int>> fpv, vpf;
+    std::vector<std::vector<int>> vpf;
     std::vector<int> del_vertices, cut, face_vertices, new_vector;
     std::vector<int> vertex_map;
     ArrayVector<double> at(3u, 1u), ni(3u,1u), pi(3u,1u), cen(3u,0u);
@@ -782,7 +782,6 @@ public:
     pv=pout.get_vertices();
     pn=pout.get_normals();
     pp=pout.get_points();
-    fpv = pout.get_faces_per_vertex();
     vpf = pout.get_vertices_per_face();
     // move the output polyhedron to be centred on the origin -- which requires we move all cutting planes as well
     // ArrayVector<double> origin = sum(pv)/static_cast<double>(pv.size());
@@ -797,7 +796,6 @@ public:
       if (!keep.all_true()){
         verbose_update("Pre-cut ",i," polyhedron vertices:\n",pv.to_string());
         verbose_update("Pre-cut ",i," polyhedron planes (p,n):\n",pn.to_string(pp));
-        verbose_update("Pre-cut ",i," polyhedron faces_per_vertex:\n", fpv);
         verbose_update("Pre-cut ",i," polyhedron vertices_per_face:\n",vpf);
         // compile the list of to-be-deleted vertices
         del_vertices.clear();
@@ -815,7 +813,6 @@ public:
         verbose_update("Facets ",cut," are cut by the plane");
         // find the new intersection points of two neighbouring facets and the cutting plane
         new_vector.clear();
-        int last_face = static_cast<int>(pn.size()); // the to-be-index of the new facet (normal)
         unsigned new_face_vertex_count{0}, new_vertex_count{0};
         for (size_t j=0; j<cut.size()-1; ++j)
         for (size_t k=j+1; k<cut.size(); ++k)
@@ -834,8 +831,6 @@ public:
             // add the intersection point to all vertices
             verbose_update("adding the intersection point ",at.to_string(0)," to existing points\n",pv.to_string());
             pv = cat(pv, at.extract(0));
-            // plus add the face index to the faces_per_vertex list for this new vertex
-            fpv.push_back({cut[j], cut[k], last_face});
             // track how many new vertices we add
             ++new_vertex_count;
           } else {
@@ -855,7 +850,6 @@ public:
         if (new_vector.size()){
             // add the normal and point for the new face
             pn = cat(pn, ni);
-            pp = cat(pp, pi);
             // extend the vertices per face vector
             vpf.push_back(new_vector);
         }
@@ -886,13 +880,10 @@ public:
         for (size_t j=0; j<vpf.size(); ++j){
           cen.resize(vpf[j].size());
           for (size_t k=0; k<vpf[j].size(); ++k) cen.set(k, pv.extract(vpf[j][k]));
-          // store the centroid as the on-plane point, but don't divide by zero
-          if (cen.size()) pp.set(j, sum(cen)/static_cast<double>(cen.size()) );
         }
         // remove any faces without three vertices
-        keep.resize(pp.size());\
-        for (size_t j=0; j<pp.size(); ++j) keep.insert(count_unique(vpf[j])>2, j);
-        pp = pp.extract(keep);
+        keep.resize(pn.size());
+        for (size_t j=0; j<pn.size(); ++j) keep.insert(count_unique(vpf[j])>2, j);
         pn = pn.extract(keep);
         // and remove their empty vertex lists
         for (auto i = vpf.begin(); i != vpf.end(); ){
@@ -909,7 +900,7 @@ public:
                         adjacent_face_no[j]++;
             }
             // for each face now check if all vertices are adjacent to 3+ faces
-            keep.resize(pp.size());
+            keep.resize(pn.size());
             size_t face_idx{0};
             for (auto i = vpf.begin(); i != vpf.end(); ){
                 bool ok{true};
@@ -917,19 +908,14 @@ public:
                 if (ok) ++i; else vpf.erase(i);
                 keep.insert(ok, face_idx++);
             }
-            check_again = keep.count_true() < pp.size();
-            if (check_again){
-                pp = pp.extract(keep);
-                pn = pn.extract(keep);
-            }
+            check_again = keep.count_true() < pn.size();
+            if (check_again) pn = pn.extract(keep);
         }
 
         // remove any vertices not on a face
         std::vector<bool> kv(pv.size(), false);
         for (auto & face: vpf) for (auto & x: face) kv[x] = true;
-//        info_update("vertices per face\n",vpf,"\nkeeping vertices ",kv);
         if (std::count(kv.begin(), kv.end(), false)){
-//            info_update("cut vertices\n",pv.to_string());
             std::vector<int> kv_map;
             int kv_count{0};
             for (auto && j : kv) kv_map.push_back(j ? kv_count++ : -1);
@@ -939,21 +925,17 @@ public:
                 face = new_vector;
             }
             pv = pv.extract(kv);
-//            info_update("become\n",pv.to_string());
         }
 
         verbose_update("to\n",vpf);
         verbose_update("keep? plane normals:\n",pn.to_string(keep));
-        verbose_update("keep? plane points:\n",pp.to_string(keep));
-        // use the Polyhedron intializer to sort out fpv and vpf -- really just fpv, vpf should be correct
+        // use the Polyhedron intializer to sort vertices in vpf
         pout = Polyhedron(pv, pn, vpf);
-        // pout = Polyhedron(pv);
         verbose_update("New ",pout.string_repr());
-        // copy the updated vertices, normals, and relational information
+        // copy the updated vertices, normals, on-plane points, and sorted vertices per point
         pv=pout.get_vertices();
         pn=pout.get_normals();
         pp=pout.get_points();
-        fpv = pout.get_faces_per_vertex();
         vpf = pout.get_vertices_per_face();
       }
     }
