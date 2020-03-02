@@ -29,10 +29,57 @@ template<class T> class BrillouinZoneNet3: public Net<T>{
 public:
   BrillouinZoneNet3(const BrillouinZone& bz, const double vol=-1):
     Net<T>(bz.get_ir_polyhedron(), vol), brillouinzone(bz) {}
-  template<typename R, typename... A>
-  BrillouinZoneNet3(const BrillouinZone& bz, const LQVec<R>& pts, A... args):
-    Net<T>(bz.get_ir_polyhedron(), pts.get_xyz(), args...),
-    brillouinzone(bz) {}
+  template<typename R>
+  BrillouinZoneNet3(const BrillouinZone& bz, const LQVec<R>& pts):
+    brillouinzone(bz) {
+    // The input points *MUST* be moved into the first/ir-Brillouin zone NOW!
+    // Plus we *must* deal with the input data, if present.
+    LQVec<double> q(bz.get_lattice(),pts.size());
+    LQVec<int> tau(bz.get_lattice(), pts.size());
+    std::vector<std::array<int,9>> rots(pts.size());
+    bz.ir_moveinto(pts, q, tau, rots);
+    this->Net<T>::reset(bz.get_ir_polyhedron(), q.get_xyz());
+  }
+  template<typename R,typename I>
+  BrillouinZoneNet3(const BrillouinZone& bz, const LQVec<R>& pts, const ArrayVector<T>& data, const std::array<I,3>& elements):
+    brillouinzone(bz) {
+    // The input points *MUST* be moved into the first/ir-Brillouin zone NOW!
+    // Plus we *must* deal with the input data, if present.
+    LQVec<double> q(bz.get_lattice(),pts.size());
+    LQVec<int> tau(bz.get_lattice(), pts.size());
+    std::vector<std::array<int,9>> rots(pts.size());
+    // the following finds q, τ and R such that pts = R q + τ
+    bz.ir_moveinto(pts, q, tau, rots);
+    ArrayVector<T> rotdata(data);
+    // we have data(pts) but want data(q) to put into the Net
+    if (elements[1]>0 || elements[2]>0){
+      // we only need to do the rotation if there are vectors or tensors
+      T tmp_v[3], tmp_m[9];
+      std::vector<std::array<int,9>> invR(rots.size());
+      for (size_t i=0; i<rots.size(); ++i)
+        matrix_inverse(invR[i].data(), rots[i].data());
+      size_t offset, sp{elements[0]+elements[1]+elements[2]};
+      size_t branches = data.numel()/sp;
+      for (size_t i=0; i<rotdata.size(); ++i)
+      for (size_t b=0; b<branches; ++b){
+        // skip over the scalar elements
+        offset = b*sp + elements[0];
+        // rotate any vectors
+        for (size_t v=0; v<elements[1]/3; ++v){
+          mul_mat_vec(tmp_v, 3u, invR[i].data(), rotdata.data(i, offset+v*3u));
+          for (int j=0; j<3; ++j) rotdata.insert(tmp_v[j], i, offset+v*3u);
+        }
+        offset += elements[1];
+        for (size_t m=0; m<elements[2]/9; ++m){
+          // calculate R⁻¹ M R (rotate by R⁻¹) in two steps
+          mul_mat_mat(tmp_m, 3u, rotdata.data(i, offset+m*9u), rots[i].data());
+          mul_mat_mat(rotdata.data(i, offset+m*9u), 3u, invR[i].data(), tmp_m);
+        }
+      }
+    }
+    this->Net<T>::reset(bz.get_ir_polyhedron(), q.get_xyz(), rotdata, elements);
+  }
+
   //! get the BrillouinZone object
   BrillouinZone get_brillouinzone(void) const {return this->brillouinzone;}
   //! get the vertices of the triangulation in absolute units

@@ -47,6 +47,8 @@ class Net {
   InterpolationData<T> data_;
 public:
   using index_t = unsigned long;
+  // Do nothing:
+  Net() {}
   // Triangulate the polyhedron
   Net(const Polyhedron& p, const double v=-1, const bool addG=false): bt_(SimpleTet(p,v,addG),p) {}
   // Triangulate the specified points
@@ -64,6 +66,15 @@ public:
   // and add the specified data
   template<class... A>
   Net(const Polyhedron& p, const ArrayVector<double>& v, A... a): bt_(SimpleTet(v), p) {
+    this->replace_data(a...);
+  }
+  // reinitialisation methods for use by BrillouinZoneNet3
+  void reset(const Polyhedron& p, const ArrayVector<double>& v){
+    bt_ = BinTet(SimpleTet(v), p);
+  }
+  template<class... A>
+  void reset(const Polyhedron& p, const ArrayVector<double>& v, A... a){
+    bt_ = BinTet(SimpleTet(v), p);
     this->replace_data(a...);
   }
   // BinTet methods:
