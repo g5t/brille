@@ -15,56 +15,21 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with brille. If not, see <https://www.gnu.org/licenses/>.            */
 
-#include <vector>
-#include <array>
-#include <algorithm>
-#include <omp.h>
-#include "arrayvector.hpp"
-#include "latvec.hpp"
-#include "polyhedron.hpp"
-#include "utilities.hpp"
-#include "debug.hpp"
-#include "triangulation_simple.hpp"
-#include "interpolation_data.hpp"
 
 #ifndef _TRELLIS_H_
 #define _TRELLIS_H_
 
-/*
-  Storing the lowest bin boundary (zero[3]), constant difference (step[3]),
-  and number of bins (size[3]) and directly calculating the bin for a given x
-  is a possible solution, but one which is no faster than storing bin bounds.
-  Since storing the boundaries can enable non-uniform bins this seems like
-  the better long-term solution.
-*/
-// template<class T, class I>
-// static I find_bin(const T zero, const T step, const I size, const T x){
-//   // we want to find i such that 0 <= i*step < x-zero < (i+1)*step
-//   I i = x > zero ?  static_cast<I>(std::floor((x-zero)/static_cast<T>(step))) : 0;
-//   return i < size ? i : size-1;
-// }
-// template<class T, class I>
-// static int on_boundary(const T zero, const T step, const I size, const T x, const I i){
-//   // if x is infinitesimally smaller than zero+step*(i+1)
-//   if (i+1<size && approx_scalar(zero+step*(i+1),x)) return  1;
-//   // if x is infinitesimally larger than zero+step*i
-//   if (i  >0    && approx_scalar(zero+step*(i  ),x)) return -1;
-//   return 0;
-// }
-template<class T>
-static size_t find_bin(const std::vector<T>& bin_edges, const T x){
-  auto found_at = std::find_if(bin_edges.begin(), bin_edges.end(), [x](double b){return b>x;});
-  size_t d = std::distance(bin_edges.begin(), found_at);
-  return d>0 ? d-1 : d;
-}
-template<class T>
-static int on_boundary(const std::vector<T>& bin_edges, const T x, const size_t i){
-  // if (i==0) then above d was *either* 0 or 1, otherwise d = i + 1;
-  // if (i==0) we can't go lower in either case, so no problem.
-  if (i+2<bin_edges.size() && approx_scalar(bin_edges[i+1],x)) return  1;
-  if (i  >0                && approx_scalar(bin_edges[i  ],x)) return -1;
-  return 0;
-}
+#include <vector>
+#include <array>
+#include <algorithm>
+#include <omp.h>
+#include "bin_utilities.hpp"
+#include "arrayvector.hpp"
+#include "latvec.hpp"
+#include "polyhedron.hpp"
+#include "debug.hpp"
+#include "triangulation_simple.hpp"
+#include "interpolation_data.hpp"
 
 enum class NodeType {null, cube, poly};
 // the number of nodes we might hold determines what type we need to store
@@ -76,10 +41,10 @@ enum class NodeType {null, cube, poly};
 //      8            18×10¹⁸    unsigned long long (aka size_t)
 // 65k is not enough. 4B *should* always be sufficient -- each node would
 // occupy a fractional volume of ~2×10⁻¹⁰ of the polyhedron, which is overkill.
-typedef unsigned long index_t;
 
 class NullNode{
 public:
+  using index_t = SimpleTet::index_t;
   NullNode() {}
   virtual ~NullNode() = default;
   //
@@ -205,6 +170,7 @@ private:
 };
 
 class NodeContainer{
+  using index_t = NullNode::index_t;
   std::vector<std::pair<NodeType,index_t>> nodes_;
   std::vector<CubeNode> cube_nodes_;
   std::vector<PolyNode> poly_nodes_;
@@ -281,6 +247,7 @@ template<typename T> class PolyhedronTrellis{
   NodeContainer nodes_;
   std::array<std::vector<double>,3> boundaries_; //!< The coordinates of the Trellis intersections, which bound the Trellis nodes
 public:
+  using index_t = unsigned long;
   explicit PolyhedronTrellis(const Polyhedron& polyhedron, const double max_volume);
   // explicit PolyhedronTrellis(const Polyhedron& polyhedron, const double max_volume){
   //   this->construct(polyhedron, max_volume);

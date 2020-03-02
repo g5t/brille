@@ -25,6 +25,7 @@
 #include "_polyhedron.hpp"
 #include "_trellis.hpp"
 #include "_nest.hpp"
+#include "_net.hpp"
 #include <pybind11/stl.h>
 #include <pybind11/operators.h>
 
@@ -276,6 +277,9 @@ PYBIND11_MODULE(_brille,m){
 
     declare_bznestq<double>(m,"");
     declare_bznestq<std::complex<double>>(m,"complex");
+
+    declare_bznetq<double>(m,"");
+    declare_bznetq<std::complex<double>>(m,"complex");
 
     py::class_<PrimitiveTransform> pt(m,"PrimitiveTransform");
     pt.def(py::init<int>(),py::arg("Hall number"));
