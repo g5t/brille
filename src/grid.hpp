@@ -601,11 +601,11 @@ public:
   //! Perform linear interpolation at the specified points expressed in a Reciprocal lattice
   template<typename S>
   std::tuple<ArrayVector<T>,ArrayVector<R>>
-  linear_interpolate_at(const LQVec<S>& x) const {return this->linear_interpolate_at(x.get_xyz());}
+  linear_interpolate_at(const LQVec<S>& x) {return this->linear_interpolate_at(x.get_xyz());}
   //! Perform linear interpolation at the specified points expressed in a Direct lattice
   template<typename S>
   std::tuple<ArrayVector<T>,ArrayVector<R>>
-  linear_interpolate_at(const LDVec<S>& x) const {return this->linear_interpolate_at(x.get_xyz());}
+  linear_interpolate_at(const LDVec<S>& x) {return this->linear_interpolate_at(x.get_xyz());}
   /*! Perform linear interpolation at the specified points expressed in an orthonormal frame
   @param x The coordinates to interpolate at expressed in the same orthonormal frame as the mapping grid
   @returns An ArrayVector of the itnerpolated values
@@ -618,7 +618,7 @@ public:
   */
   template<typename S>
   std::tuple<ArrayVector<T>,ArrayVector<R>>
-  linear_interpolate_at(const ArrayVector<S>& x) const {
+  linear_interpolate_at(const ArrayVector<S>& x) {
     unsigned int mask = this->check_before_interpolating(x);
     ArrayVector<T> valout(this->data_.values().numel(), x.size());
     ArrayVector<R> vecout(this->data_.vectors().numel(), x.size());
@@ -681,13 +681,13 @@ public:
   //! Perform linear interpolation in parallel at the specified points expressed in a Reciprocal lattice
   template<typename S>
   std::tuple<ArrayVector<T>,ArrayVector<R>>
-  parallel_linear_interpolate_at(const LQVec<S>& x, const int threads) const {
+  parallel_linear_interpolate_at(const LQVec<S>& x, const int threads) {
     return this->parallel_linear_interpolate_at(x.get_xyz(),threads);
   }
   //! Perform linear interpolation in parallel at the specified points expressed in a Direct lattice
   template<typename S>
   std::tuple<ArrayVector<T>,ArrayVector<R>>
-  parallel_linear_interpolate_at(const LDVec<S>& x, const int threads) const {
+  parallel_linear_interpolate_at(const LDVec<S>& x, const int threads) {
     return this->parallel_linear_interpolate_at(x.get_xyz(),threads);
   }
   /*! Perform linear interpolation in parallel at the specified points expressed in an orthonormal frame
@@ -703,7 +703,7 @@ public:
   */
   template<typename S>
   std::tuple<ArrayVector<T>,ArrayVector<R>>
-  parallel_linear_interpolate_at(const ArrayVector<S>& x, const int threads) const {
+  parallel_linear_interpolate_at(const ArrayVector<S>& x, const int threads) {
     unsigned int mask = this->check_before_interpolating(x);
     ArrayVector<T> valout(this->data_.values().numel(), x.size());
     ArrayVector<R> vecout(this->data_.vectors().numel(), x.size());

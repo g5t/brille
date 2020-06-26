@@ -233,7 +233,7 @@ public:
     return mask;
   }
   std::tuple<ArrayVector<T>, ArrayVector<S>>
-  interpolate_at(const ArrayVector<double>& x) const {
+  interpolate_at(const ArrayVector<double>& x) {
     this->check_before_interpolating(x);
     ArrayVector<T> vals(data_.values().numel(), x.size());
     ArrayVector<S> vecs(data_.vectors().numel(), x.size());
@@ -245,7 +245,7 @@ public:
     return std::make_tuple(vals, vecs);
   }
   std::tuple<ArrayVector<T>, ArrayVector<S>>
-  interpolate_at(const ArrayVector<double>& x, const int threads) const {
+  interpolate_at(const ArrayVector<double>& x, const int threads) {
     this->check_before_interpolating(x);
     omp_set_num_threads( (threads > 0) ? threads : omp_get_max_threads() );
     // shared between threads
@@ -271,7 +271,7 @@ public:
     }
     return std::make_tuple(vals, vecs);
   }
-  const InterpolationData<T,S>& data(void) const {return data_;}  
+  const InterpolationData<T,S>& data(void) const {return data_;}
   template<typename... A> void replace_value_data(A... args) { data_.replace_value_data(args...); }
   template<typename... A> void replace_vector_data(A... args) { data_.replace_vector_data(args...); }
   template<template<class> class A>

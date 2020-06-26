@@ -348,7 +348,7 @@ public:
     return mask;
   }
   std::tuple<ArrayVector<T>, ArrayVector<R>>
-  interpolate_at(const ArrayVector<double>& x) const {
+  interpolate_at(const ArrayVector<double>& x) {
     verbose_update("Single thread interpolation at ",x.size()," points");
     this->check_before_interpolating(x);
     ArrayVector<T> vals_out(data_.values().numel(), x.size());
@@ -365,7 +365,7 @@ public:
     return std::make_tuple(vals_out, vecs_out);
   }
   std::tuple<ArrayVector<T>, ArrayVector<R>>
-  interpolate_at(const ArrayVector<double>& x, const int threads) const {
+  interpolate_at(const ArrayVector<double>& x, const int threads) {
     this->check_before_interpolating(x);
     omp_set_num_threads( (threads > 0) ? threads : omp_get_max_threads() );
     verbose_update("Parallel interpolation at ",x.size()," points with ",threads," threads");

@@ -108,7 +108,7 @@ public:
   }
   template<typename S>
   std::tuple<ArrayVector<T>,ArrayVector<R>>
-  ir_interpolate_at(const LQVec<S>& x, const int nthreads, const bool no_move=false) const{
+  ir_interpolate_at(const LQVec<S>& x, const int nthreads, const bool no_move=false){
     LQVec<S> ir_q(x.get_lattice(), x.size());
     LQVec<int> tau(x.get_lattice(), x.size());
     std::vector<size_t> rot(x.size(),0u), invrot(x.size(),0u);

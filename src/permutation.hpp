@@ -612,6 +612,17 @@ std::vector<int> jv_permutation(const std::vector<T>& cost){
   return rowsol; // or should this be colsol?
 }
 
+template<class T, class I>
+bool jv_permutation_fill(const std::vector<T>& cost, std::vector<I>& row){
+  I Nobj = static_cast<I>(std::sqrt(cost.size()));
+  assert( cost.size() == Nobj*Nobj);
+  std::vector<T> u(Nobj,T(0)), v(Nobj,T(0));
+  std::vector<I> col(Nobj,0);
+  row.resize(Nobj);
+  lapjv(Nobj, cost.data(), false, row.data(), col.data(), u.data(), v.data());
+  return true;
+}
+
 /*! \brief Use a Stable Matching algorithm to determine a permutation
 
 For two arrays of data, located in memory at `centre` and `neighbour`, and each
@@ -741,6 +752,81 @@ delete[] cost;
 delete[] rowsol;
 delete[] colsol;
 return true;
+}
+
+// The following apply_permutation has been adapted from
+//  https://devblogs.microsoft.com/oldnewthing/20170104-00/?p=95115
+/*! \brief Apply a permutation to a random access iterable object
+
+For a permutation held in one random access iterable object of length `N`
+comprised of the integers `(0,N]` in some order, and a second iterable
+containing `N` objects, find the permuted iterable such that
+
+  permuted_object_iterable[i] = object_iterable[index_iterable[i]]
+
+for all `i` by swapping elements in place and using the permutation iterable
+as a scratch workspace.
+
+Upon completion the permutation iterable will be ordered 0:N-1.
+
+@param objects An iterator pointing to the first element of the object iterable
+@param end An iterator pointing to the end of the object iterable
+@param indices An iterator pointing to the first element of the permutation iterable
+*/
+template<typename ObjItr, typename PermItr>
+void
+apply_permutation(ObjItr objects, ObjItr end, PermItr indices){
+  using Obj = std::iterator_traits<ObjItr>::value_type;
+  using Dif = std::iterator_traits<PermItr>::value_type;
+  Dif numel = end - objects;
+  for (Dif i=0; i<numel; ++i) if (i != indices[i]) {
+    // move the object to a temporary location (fallsback to copy)
+    Obj obji{std::move(objects[i])};
+    // keep track of where we are in the swap loop
+    Dif current = i;
+    while (i != indices[current]){
+      Dif next = indices[current];
+      objects[current] = std::move(objects[next]);
+      indices[current] = current;
+      current = next;
+    }
+    objects[current] = std::move(obji);
+    indices[current] = current;
+  }
+}
+
+/*! \brief Apply an inverse permutation to a random access iterable object
+
+For an inverse permutation held in one random access iterable object of length
+`N` comprised of the integers `(0,N]` in some order, and a second iterable
+containing `N` objects, find the inverse permuted iterable such that
+
+  permuted_object_iterable[index_iterable[i]] = object_iterable[i]
+
+for all `i` by swapping elements in place and using the inverse permutation
+iterable as a scratch workspace.
+
+@param objects An iterator pointing to the first element of the object iterable
+@param end An iterator pointing to the end of the object iterable
+@param indices An iterator pointing to the first element of the inverse permutation iterable
+*/
+template<typename ObjItr, typename PermItr>
+void
+apply_inverse_permutation(ObjItr objects, ObjItr end, PermItr indices){
+  using Obj = std::iterator_traits<ObjItr>::value_type;
+  using Dif = std::iterator_traits<PermItr>::value_type;
+  Dif numel = end - objects;
+  for (Dif i=0; i<numel; ++i) while (i != indices[i]) {
+    // pop-out the targeted object and its index
+    Dif pop_idx = indices[indices[i]];
+    Obj pop_obj{std::move(objects[indices[i]])};
+    // move the current object and index to the target
+    objects[indices[i]] = std::move(objects[i]);
+    indices[indices[i]] = indices[i];
+    // and put the popped object and index back in here
+    objects[i] = std::move(pop_idx);
+    indices[i] = pop_idx;
+  }
 }
 
 #endif
