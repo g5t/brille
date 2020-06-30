@@ -232,148 +232,171 @@ In either case, this over head is likely much smaller than the memory use of a
 freely-growing queue since there is no bound on the number of shared
 neighbouring vertices for two connected vertices in a relational mesh.
 */
-template<class T,class S> template<typename R>
-size_t PolyhedronTrellis<T,S>::consensus_sort_nodes(
-  const index_t first_idx, const R weights[3], const int func, const size_t spobj[3],
-  ArrayVector<size_t>& perm,
-  std::vector<bool>& node_done,
-  std::vector<bool>& node_lock,
-  std::vector<size_t>& node_visits,
-  std::vector<bool>& vertex_done,
-  std::vector<bool>& vertex_lock,
-  std::vector<size_t>& vertex_visits
-) const {
-  std::vector<size_t> neighbours;
-  std::vector<bool> queued(nodes_.size(), false);
+// template<class T,class S>
+// size_t
+// PolyhedronTrellis<T,S>::consensus_sort_nodes(const index_t first_idx,
+//   std::vector<SortingStatus>& node_status, std::vector<SortingStatus>& vertex_status)
+// {
+//   //std::vector<bool> queued(nodes_.size(), false);
+//   std::queue<index_t> queue;
+//   queue.push(first_idx);
+//   const size_t max_visits{10};
+//   size_t num_sorted=0, count=0u, refresh=1u;
+//   bool more_to_do=true;
+//   size_t blanks = 0;
+//   std::string prompt = "Nodes queued: ";
+//   std::cout << prompt;
+//   //auto can_queue = [&](SortingStatus s){return (!s.locked() && !s.sorted());};
+//   //auto update_queue = [&](index_t i){queue.push(i); queued[i]=true;};
+//   while (more_to_do){
+//     index_t idx = queue.front();
+//     queue.pop();
+//     node_status[idx].queued(false);
+//     this->handle_one_node(idx, node_status, vertex_status, queue);
+//     // queued[idx] = false;
+//     // if (node_status[idx].unlocked_addvisit_unsorted(max_visits) && this->consensus_sort_node(idx, node_status, vertex_status))
+//     //   ++num_sorted;
+//     // if (!node_status[idx].locked()){
+//     //   // enqueue the neighbouring nodes which need it
+//     //   for (index_t n_idx: this->which_node_neighbours(node_status, can_queue, idx))
+//     //     if (!queued[n_idx]) update_queue(n_idx);
+//     //   // and then re-add this node if it wasn't finished
+//     //   if (!node_status[idx].sorted()) update_queue(idx);
+//     // }
+//     more_to_do = !queue.empty();
+//     if (++count >= refresh){
+//       for (size_t i=0; i<blanks; ++i) std::cout << "\b";
+//       size_t new_blanks{1};
+//       if (queue.size()>0) new_blanks += static_cast<size_t>(std::floor(std::log10(queue.size())));
+//       if (new_blanks < blanks){
+//         for (size_t i=0; i<blanks; ++i) std::cout << " ";
+//         for (size_t i=0; i<blanks; ++i) std::cout << "\b";
+//       }
+//       std::cout << queue.size();
+//       blanks = new_blanks;
+//       count = 0u;
+//       refresh = queue.size() >> 2u;
+//       if (refresh < 1u) refresh = 1u;
+//       more_to_do = queue.size() > 0;
+//     }
+//   }
+//   std::cout << "\r";
+//   blanks += prompt.size();
+//   for (size_t i=0; i<blanks; ++i) std::cout << " ";
+//   std::cout << "\r";
+//   return num_sorted;
+// }
+template<class T,class S>
+size_t
+PolyhedronTrellis<T,S>::consensus_sort_nodes(const index_t first_idx,
+  std::vector<SortingStatus>& node_status, std::vector<SortingStatus>& vertex_status)
+{
   std::queue<index_t> queue;
   queue.push(first_idx);
-  const size_t max_visits{10};
-  size_t num_sorted=0, count=0u, refresh=1u;
-  bool more_to_do=true;
-  size_t blanks = 0;
-  std::string prompt = "Nodes queued: ";
-  std::cout << prompt;
-  while (more_to_do){
-    index_t idx = queue.front();
-    queue.pop();
-    queued[idx] = false;
-    if (!node_lock[idx]){
-      node_lock[idx] = ++node_visits[idx] > max_visits;
-      if (!node_done[idx]){
-        node_done[idx] = this->consensus_sort_node(weights, func, spobj, perm, vertex_done, vertex_lock, vertex_visits, idx);
-        if (node_done[idx]) ++num_sorted;
-      }
-      // enqueue the neighbouring nodes no matter what
-      for (index_t n_idx: this->which_node_neighbours(node_done, false, idx))
-        if (!queued[n_idx]) {
-          queue.push(n_idx);
-          queued[n_idx] = true;
+  size_t num_sorted=0;
+  std::atomic<int> num_working{0};
+  std::condition_variable cv;
+  std::mutex queue_mutex;
+  #pragma omp parallel
+  {
+    ++num_working;
+    while (true) {
+      // we need a lock to prevent modifications to the queue
+      // one thread at a time will pass this lock
+      std::unique_lock<std::mutex> lk(queue_mutex);
+      // if the queue is empty enter a holding loop as long as there might
+      // be more work to do
+      if (queue.empty()){
+        --num_working; // this thread isn't doing anything
+        if (num_working < 1){
+          // no one is working, so we're done here. wake up the other threads
+          cv.notify_all();
+          // and break out of the while loop
+          break;
         }
-      // and then re-add this node if it wasn't finished
-      if (!node_done[idx]) {
-        queue.push(idx);
-        queued[idx] = true;
+        do {
+          // another thread *is* working so wait for a notification
+          cv.wait(lk);
+          // after the notification go back to waiting if the queue is empty
+          // and another thread is still working
+        } while (num_working > 0 && queue.empty());
+        // we're awake, if somehow no one else is working and there is nothing
+        // queued, we should jump out of the while loop
+        if (num_working < 1 && queue.empty()) break;
+        // there are other worker(s) and/or the queue isn't empty, so go back to work
+        ++num_working;
       }
-    }
-    more_to_do = !queue.empty();
-    if (++count >= refresh){
-      for (size_t i=0; i<blanks; ++i) std::cout << "\b";
-      size_t new_blanks{1};
-      if (queue.size()>0) new_blanks += static_cast<size_t>(std::floor(std::log10(queue.size())));
-      if (new_blanks < blanks){
-        for (size_t i=0; i<blanks; ++i) std::cout << " ";
-        for (size_t i=0; i<blanks; ++i) std::cout << "\b";
+      info_update_if(queue.size()<1,"How is the queue empty?");
+      // at this point the queue can not be empty (hopefully)
+      index_t idx = queue.front();
+      queue.pop();
+      node_status[idx].queued(false);
+      node_status[idx].claimed(true);
+      std::cout << std::setw(2) << "thread " << omp_get_thread_num() << " working on " << idx << std::endl;
+      lk.unlock();
+
+      // handle this node and get back a list of neighbours which were, at the
+      // time not sorted, not fixed, not queued, and not claimed
+      std::vector<index_t> upnext = this->handle_one_node(idx, node_status, vertex_status);
+      // hard work done; wait for a lock to edit the node_status and queue
+      lk.lock();
+      // indicate that this node is done and give up our claim to it
+      node_status[idx].sorted(true);
+      node_status[idx].claimed(false);
+      // double check that none of neighbouring nodes have been sneakily
+      // handled while we were waiting for a lock:
+      for (index_t un: upnext) if(node_status[un].is_queable()) {
+        queue.push(un);
+        node_status[un].queued(true);
+        cv.notify_one();
       }
-      std::cout << queue.size();
-      blanks = new_blanks;
-      count = 0u;
-      refresh = queue.size() >> 4;
-      if (refresh < 1u) refresh = 1u;
-      more_to_do = queue.size() > 0;
+      lk.unlock();
     }
   }
-  std::cout << "\r";
-  blanks += prompt.size();
-  for (size_t i=0; i<blanks; ++i) std::cout << " ";
-  std::cout << "\r";
   return num_sorted;
 }
 
-
-template<class T,class S> template<typename R>
-bool PolyhedronTrellis<T,S>::consensus_sort_node(
-  const R w[3], const int func, const size_t spobj[3],
-  ArrayVector<size_t>& p,
-  std::vector<bool>& done,
-  std::vector<bool>& lock,
-  std::vector<size_t>& visits,
-  const index_t node
-) const {
-  const size_t max_visits{10}; // this is bad.
-  std::vector<index_t> verts = nodes_.vertices(node);
-  for (index_t & i: verts)
-  if (!lock[i]){
-    if (!done[i]){
-      std::vector<index_t> are_done;
-      std::copy_if(verts.begin(), verts.end(), std::back_inserter(are_done), [&](index_t i){return done[i];});
-      done[i] = this->consensus_sort_difference(w, func, spobj, p, done, i, are_done);
-    }
-    lock[i] = ++visits[i] > max_visits;
+template<class T, class S>
+std::vector<index_t>
+PolyhedronTrellis<T,S>::handle_one_node(
+  const index_t idx,
+  std::vector<SortingStatus>& nstat, std::vector<SortingStatus>& vstat
+){
+  const size_t max_visits{100};
+  std::vector<index_t> return_value;
+  bool sort_result{false};
+  if (nstat[idx].unlocked_addvisit_unsorted(max_visits))
+    sort_result = this->consensus_sort_node(idx, vstat);
+  auto queable = [](const SortingStatus & s){ return s.is_queable(); };
+  if (!nstat[idx].locked()){
+    return_value = this->which_node_neighbours(nstat, queable, idx);
+    if (!sort_result) return_value.push_back(idx);
   }
-  size_t count_done = std::count_if(verts.begin(), verts.end(), [&](index_t i){return done[i];});
-  return count_done == verts.size();
+  return return_value;
 }
 
-template<class T,class S> template<typename R>
-bool PolyhedronTrellis<T,S>::consensus_sort_difference(
-  const R w[3], const int func, const size_t spobj[3],
-  ArrayVector<size_t>& p, std::vector<bool>& done, const index_t idx,
-  const std::vector<index_t>& presorted
-) const {
-  if (!presorted.size()) return false;
-  // Find the *closest* point(s) which are sorted
-  ArrayVector<double> vectors = vertices_.extract(presorted) - vertices_.extract(idx);
-  std::vector<double> lengths;
-  for (size_t i=0; i<vectors.size(); ++i) lengths.push_back(vectors.norm(i));
-  double min_length = *(std::min_element(lengths.begin(), lengths.end()));
-  std::vector<index_t> nearest;
-  for(size_t i=0; i<lengths.size(); ++i)
-    if (approx_scalar(lengths[i], min_length))
-      nearest.push_back(presorted[i]);
 
-
-  size_t nn = nearest.size();
-  // For each sorted neighbour, find the sorting permutation which sorts the
-  // data at idx the same as the data at the neighbour.
-  // Store the results into a temporary permutation array, abusing the last
-  // element to hold each neighbour's permutation in turn.
-  ArrayVector<size_t> t(p.numel(), nn+1);
-  for (size_t i=0; i<nn; ++i){
-    for (size_t j=0; j<p.numel(); ++j) t.insert(p.getvalue(nearest[i], j), nn, j);
-    jv_permutation(data_.values().data().data(idx, 0),        data_.vectors().data().data(idx, 0),
-                   data_.values().data().data(nearest[i], 0), data_.vectors().data().data(nearest[i], 0),
-                   data_.values().elements(), data_.vectors().elements(), w[0], w[1], w[2], spobj[0], spobj[1], spobj[2],
-                   t, i, nn, func);
+template<class T,class S>
+bool PolyhedronTrellis<T,S>::consensus_sort_node(
+  const index_t node, std::vector<SortingStatus>& vstat
+) {
+  bool all_done{true};
+  using TetIdx = std::array<index_t,4>;
+  // add a check here for degenerate mode(s)?
+  if (nodes_.is_poly(node)){
+    // in the case of a polynode we can exploit the inner connectivity
+    // but we need to start from tetrahedra that have sorted vertices
+    std::vector<TetIdx> tets = nodes_.vertices_per_tetrahedron(node);
+    auto sorted = [&](const index_t i){return vstat[i].sorted();};
+    auto scount = [&](const TetIdx& t){return std::count_if(t.begin(), t.end(), sorted);};
+    auto bigger = [&](const TetIdx& t1, const TetIdx& t2){return scount(t1) > scount(t2);};
+    std::sort(tets.begin(), tets.end(), bigger);
+    for (auto vi_t: tets) for (auto vi: vi_t)
+      all_done &= data_.consensus_sort(vi_t.begin(), vi_t.end(), vi, vstat);
+  } else {
+    std::vector<index_t> vi_n = nodes_.vertices(node);
+    for (auto vi: vi_n)
+      all_done &= data_.consensus_sort(vi_n.begin(), vi_n.end(), vi, vstat);
   }
-  // The first presorted.size() elements of tperm now contain the permutation
-  // for idx determined by the equal-index neighbour.
-  std::vector<bool> uncounted(nn, true);
-  std::vector<size_t> freq(nn, 1u), equiv_to(nn, 0u);
-  for (size_t i=0; i<nn; ++i) equiv_to[i] = i;
-  //bool all_agreee;
-  for (size_t i=0; i<nn-1; ++i) if (uncounted[i])
-  for (size_t j=i+1; j<nn; ++j) if (uncounted[j] && t.vector_approx(i, j)) {
-    uncounted[j] = false;
-    ++freq[i];
-    freq[j] = 0;
-    equiv_to[j] = i;
-  }
-  size_t hfidx = std::distance(freq.begin(), std::max_element(freq.begin(), freq.end()));
-  // Pick the highest-frequency permutation as the right one
-  for (size_t j=0; j<p.numel(); ++j) p.insert(t.getvalue(hfidx, j), idx, j);
-  // If the highest frequency is nearest.size() then all permutations agree.
-  // Otherwise we need to indicate that the disagreeing nearest are not done.
-  if (freq[hfidx] < nn)
-  for (size_t i=0; i<nn; ++i) if (equiv_to[i] != hfidx) done[nearest[i]] = false;
-  return true;
+  return all_done;
 }

@@ -26,6 +26,7 @@ set(BRILLE_PYTHON_MODULE_SOURCES
   _pointsymmetry.cpp
   _polyhedron.cpp
   _primitive.cpp
+  _sorting_status.cpp
   _spacegroup.cpp
   _symmetry.cpp
   _trellis.cpp

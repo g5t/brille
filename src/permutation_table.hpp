@@ -21,7 +21,6 @@
 #include <array>
 #include <tuple>
 #include <vector>
-#include <utility>
 #include <algorithm>
 
 // /*
@@ -45,45 +44,62 @@
 class PermutationTable
 {
 public:
-	using int_t = unsigned int; // on Windows uint_fast8_t ≡ unsigned char, which somehow caused an infinite loop
+	using int_t = int; // uint_fastN_t or uint_leastN_t?
 private:
 	size_t IndexSize;
-	std::vector<size_t> ijmapkey;
-	std::vector<size_t> ijmapval;
+	std::map<size_t,size_t> ijmap;
 	std::vector<std::vector<int_t>> permutations;
 public:
 	PermutationTable(size_t ni, size_t branches): IndexSize(ni) {
 		std::vector<int_t> identity(branches);
 		std::iota(identity.begin(), identity.end(), 0);
 		permutations.push_back(identity);
-		ijmapkey.push_back(0);
-		ijmapval.push_back(0);
+		ijmap.emplace(0u, 0u);
 	};
 public:
-	size_t find(const size_t i, const size_t j) const {
-		return std::distance(ijmapkey.begin(), std::find(ijmapkey.begin(), ijmapkey.end(), this->ij2key(i,j)));
+	std::map<size_t,size_t>::const_iterator find(const size_t i, const size_t j) const {
+		auto itr = this->ij2key(i,j);
+		return ijmap.find(itr);
+	}
+	bool has(const size_t i, const size_t j) const {
+		auto itr =this->find(i,j);
+		return itr != ijmap.end();
+	}
+	size_t set(const size_t i, const size_t j, const size_t idx){
+		size_t key = this->ij2key(i,j);
+		auto itr = ijmap.find(key);
+		if (itr != ijmap.end()) return itr->second;
+		ijmap.emplace(key, idx);
+		return idx;
 	}
 	size_t set(const size_t i, const size_t j, const std::vector<int_t>& v){
 		bool contains{false};
 		size_t idx{0};
+		size_t key = this->ij2key(i,j);
+		auto itr = ijmap.find(key);
+		// if the key is already present, emplace will not overwrite it anyway
+		if (itr != ijmap.end()) return itr->second;
+		// the ijmap does not contain key (i,j), so check for permutation duplication
 		std::tie(contains, idx) = this->find_permutation(v);
+		// add this permutation if it's not present
 		if (!contains) permutations.push_back(v);
-		ijmapkey.push_back(this->ij2key(i,j));
-		ijmapval.push_back(idx);
+		// and store the mapping
+		ijmap.emplace(key, idx);
 		return idx;
 	}
 	std::vector<int_t> safe_get(const size_t i, const size_t j) const {
-		size_t ijmapidx = this->find(i,j);
-		return ijmapidx < ijmapkey.size() ? permutations[ijmapval[ijmapidx]] : std::vector<int_t>();
+		auto itr = this->find(i,j);
+		return itr != ijmap.end() ? permutations[itr->second] : std::vector<int_t>();
 	}
 private:
-	size_t ij2key(const size_t i, const size_t j) const { return i==j ? 0u : i*IndexSize + j; }
+	size_t ij2key(const size_t i, const size_t j) const { return i==j ? 0u : i*IndexSize+j; }
 	//
 	std::tuple<bool, size_t> find_permutation(const std::vector<int_t>& v) const {
 		size_t N = v.size();
 		auto equal_perm = [&](const std::vector<int_t>& p){
 			if (p.size() != N) return false;
-			for (size_t i=0; i<N; ++i) if (p[i] != v[i]) return false;
+			for (size_t i=0; i<N; ++i)
+				if (p[i] != v[i]) return false;
 			return true;
 		};
 		auto itr = std::find_if(permutations.begin(), permutations.end(), equal_perm);

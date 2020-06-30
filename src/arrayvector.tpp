@@ -1370,26 +1370,13 @@ ArrayVector<T>::permute_modes(const size_t idx, std::vector<I>& indices){
   assert(this->numel() == span*n_modes);
   // we need temporary storage
   auto holder = std::unique_ptr<T[]>(new T[span]);
-  // and some helper functions to move data around
-  auto grab = [&](size_t i){
-    for(size_t j=0; j<span; ++j) holder[j] = this->getvalue(idx, i*span + j);
-    return 0;
-  };
-  auto put = [&](size_t i){
-    for(size_t j=0; j<span; ++j) this->insert(holder[j], idx, i*span+j);
-    return 0;
-  }
-  auto move = [&](size_t src, size_t dst){
-    for(size_t j=0; j<span; ++j) this->insert(this->getvalue(idx, src*span+j), idx, dst*span+j);
-    return 0;
-  }
   // now the actual work
   for (size_t m=0; m<n_modes; ++m) if (m != static_cast<size_t>(indices[m])){
     // move-out the current mᵗʰ mode into the temporary holder
     for(size_t j=0; j<span; ++j)
       holder[j] = this->getvalue(idx, m*span + j);
     // loop through swapping as we go
-    size_t current{m}, next;
+    size_t current{m};
     while (m != static_cast<size_t>(indices[current])) {
       // the next index along the chain
       size_t next = static_cast<size_t>(indices[current]);

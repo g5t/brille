@@ -165,7 +165,9 @@ class BrEu:
         The weights are both one by default but can be modified as necessary.
         """
         self._fill_grid(frqs, vecs, vf=weight_function)
-        if sort:
+        # Temporary stopgap: The old-way uses a method multi_sort_perm
+        # while the new way uses one called sort:
+        if sort and callable(getattr(self.grid, 'multi_sort_perm', None)):
             # The input to sort_perm indicates what weight should be given to
             # each part of the resultant cost matrix. In this case, each phonon
             # branch consists of one energy, n_ions three-vectors, and no matrix;
@@ -183,6 +185,8 @@ class BrEu:
             # # The gridded eigenvectors are (n_pt, n_br, n_io, 3)
             # vecs = np.array([x[y,:,:] for (x, y) in zip(self.grid.vectors, perm)])
             self._fill_grid(frqs, vecs, vf=weight_function)
+        elif sort and callable(getattr(self.grid, 'sort', None)):
+            self.grid.sortingstatus = self.grid.sort()
         return frqs, vecs
 
     # pylint: disable=c0103,w0613,no-member

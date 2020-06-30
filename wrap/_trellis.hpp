@@ -196,15 +196,7 @@ void declare_bztrellisq(py::module &m, const std::string &typestr){
 
   // .def("__repr__",&Class::to_string)
   //
-  .def("multi_sort_perm",
-    [](Class& cobj, const double wS, const double wV,
-                    const double wM, const int vwf){
-    return av2np(cobj.multi_sort_perm(wS,wV,wM,vwf));
-  }, "scalar_cost_weight"_a=1,
-     "vector_cost_weight"_a=1,
-     "matrix_cost_weight"_a=1,
-     "vector_weight_function"_a=0
-  )
+  .def("sort",[](Class& cobj){return cobj.sort();})
   ;
 }
 

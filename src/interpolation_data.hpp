@@ -256,6 +256,35 @@ public:
     }
     // info_update_if(arbitrary_phase_allowed, i0,'-',i1,'\n',cost);
   }
+  template<typename I>
+  void permute_modes(const I idx, const std::vector<int_t>& p){
+    std::vector<int_t> perm;
+    std::copy(p.begin(), p.end(), std::back_inserter(perm));
+    // perm is used as scratch space by ArrayVector::permute_modes
+    data_.permute_modes(idx, perm);
+  }
+  template<typename I>
+  void inverse_permute_modes(const I idx, const std::vector<int_t>& invp){
+    std::vector<int_t> invperm;
+    std::copy(invp.begin(), invp.end(), std::back_inserter(invperm));
+    // invperm is used as scratch space by ArrayVector::inverse_permute_modes
+    data_.inverse_permute_modes(idx, invperm);
+  }
+  template<typename I>
+  bool any_equal_modes(const I idx) const {
+    size_t span = static_cast<size_t>(this->branch_span());
+    // since we're probably only using this when the data is provided and
+    // most eigenproblem solvers sort their output by eigenvalue magnitude it is
+    // most-likely for mode i and mode i+1 to be equal.
+    // ∴ search (i,j), (i+1,j+1), (i+2,j+2), ..., i ∈ (0,N], j ∈ (1,N]
+    // for each j = i+1, i+2, i+3, ..., i+N-1
+    for (element_t offset=1; offset < branches_; ++offset)
+    for (element_t i=0, j=offset; j < branches_; ++i, ++j)
+    if (approx_vector(span, data_.data(idx, i*span), data_.data(idx, j*span)))
+      return true;
+    // no matches
+    return false;
+  }
 private:
   template<typename I> element_t branch_span(const std::array<I,3>& e) const {
     return static_cast<element_t>(e[0])+static_cast<element_t>(e[1])+static_cast<element_t>(e[2]);
@@ -654,12 +683,29 @@ public:
   // Calculate the Debye-Waller factor for the provided Q points and ion masses
   template<template<class> class A>
   ArrayVector<double> debye_waller(const A<double>& Q, const std::vector<double>& M, const double t_K) const;
-private:
-  ArrayVector<double> debye_waller_sum(const ArrayVector<double>& Q, const double t_K) const;
-  ArrayVector<double> debye_waller_sum(const LQVec<double>& Q, const double beta) const{ return this->debye_waller_sum(Q.get_xyz(), beta); }
   //
   template<typename I, typename S=typename CostTraits<T>::type, typename=std::enable_if_t<std::is_integral<I>::value> >
   std::vector<S> cost_matrix(const I i0, const I i1) const;
+  template<typename I, typename=std::enable_if_t<std::is_integral<I>::value>>
+  void permute_modes(const I i, const std::vector<int_t>& p){
+    values_.permute_modes(i, p);
+    vectors_.permute_modes(i, p);
+  }
+  template<typename I, typename=std::enable_if_t<std::is_integral<I>::value>>
+  void inverse_permute_modes(const I i, const std::vector<int_t>& p){
+    values_.inverse_permute_modes(i, p);
+    vectors_.inverse_permute_modes(i, p);
+  }
+  template<typename I, typename=std::enable_if_t<std::is_integral<I>::value>>
+  bool is_degenerate(const I idx) const {
+    return values_.any_equal_modes(idx);
+    // we could try and do something fancier, but it's probaby not useful.
+  }
+  template<typename Itr, typename I=typename std::iterator_traits<Itr>::value_type>
+  bool consensus_sort(Itr, Itr, const I, std::vector<SortingStatus>&);
+private:
+  ArrayVector<double> debye_waller_sum(const ArrayVector<double>& Q, const double t_K) const;
+  ArrayVector<double> debye_waller_sum(const LQVec<double>& Q, const double beta) const{ return this->debye_waller_sum(Q.get_xyz(), beta); }
 };
 
 
@@ -812,4 +858,62 @@ InterpolationData<T,R>::cost_matrix(const I i0, const I i1) const {
   }
   return cost;
 }
+
+template<class T, class R> template<typename Itr, typename I>
+bool
+InterpolationData<T,R>::consensus_sort(Itr n_beg, Itr n_end, const I i, std::vector<SortingStatus>& status){
+  // we need the value type from the provided iterator
+  //using I = typename std::iterator_traits<Itr>::value_type;
+  // track the number of visits to the vertex
+  status[i].addvisit();
+  // if this vertex has not been sorted and has not been locked
+  if (!status[i].sorted() && !status[i].locked()){
+    // attempt to sort it by finding the neighbours which have been sorted
+    std::vector<I> sorted;
+    std::copy_if(n_beg, n_end, std::back_inserter(sorted),
+      [&](const I j){return (j!=i && status[j].sorted());});
+    if (!sorted.empty()){
+      // collect the relative sorting permutation(s) for all sorted neighbours
+      std::vector<std::vector<int_t>> pij, pji;
+      for (auto j: sorted){
+        std::vector<int_t> row, col;
+        jv_permutation_fill(this->cost_matrix(i, j), row, col);
+        pij.push_back(row);
+        pji.push_back(col);
+      }
+      // if the permutations are all idential (all of pij or all of pji)
+      // then we can safely permute the data at vertex i, and it is sorted
+      if (std::all_of(pij.begin(), pij.end(),[p0=pij[0]](const std::vector<int_t>& p){return std::equal(p.begin(), p.end(), p0.begin());})) {
+        this->permute_modes(i, pji[0]);
+        status[i].sorted(true);
+        for (size_t z=0; z<sorted.size(); ++z){
+          permutation_table_.set(i, sorted[z], 0u);
+          permutation_table_.set(sorted[z], i, 0u);
+        }
+      // otherwise we can not permute the data and must track the permutations
+      } else for (size_t z=0; z<sorted.size(); ++z){
+        permutation_table_.set(i, sorted[z], pij[z]);
+        permutation_table_.set(sorted[z], i, pji[z]);
+      }
+    }
+  }
+  // Whether or not this vertex has been sorted or locked we need to check
+  // if any neighbouring vertices have been locked but were not sorted.
+  // If so we must track their permutation(s) relative to this vertex too.
+  std::vector<I> locked;
+  std::copy_if(n_beg, n_end, std::back_inserter(locked),
+    [&](const I j){return (j!=i && status[j].locked() && !status[j].sorted());});
+  // only calculate the permutation if it isn't already present
+  for (auto j: locked) if (!permutation_table_.has(i,j)) {
+    std::vector<int_t> lpij, lpji;
+    jv_permutation_fill(this->cost_matrix(i, j), lpij, lpji);
+    permutation_table_.set(i, j, lpij);
+    permutation_table_.set(j, i, lpji);
+  }
+  // lock this vertex to indicate that it's been dealt with
+  status[i].locked(true);
+  // for legacy reasons(?) return true no matter what
+  return true;
+}
+
 #endif
