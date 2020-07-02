@@ -61,7 +61,8 @@ void declare_bztrellisq(py::module &m, const std::string &typestr){
     // py::array_t<T> pyvals, py::array_t<int, py::array::c_style> pyvalelrl,
     // py::array_t<R> pyvecs, py::array_t<int, py::array::c_style> pyvecelrl
     py::array_t<T> pyvals, py::array_t<int> pyvalel,
-    py::array_t<R> pyvecs, py::array_t<int> pyvecel
+    py::array_t<R> pyvecs, py::array_t<int> pyvecel,
+    bool sort
   ){
     ArrayVector<T> vals;
     ArrayVector<R> vecs;
@@ -76,7 +77,8 @@ void declare_bztrellisq(py::module &m, const std::string &typestr){
 
     cobj.replace_value_data(vals, val_sh, val_el, val_rl);
     cobj.replace_vector_data(vecs, vec_sh, vec_el, vec_rl);
-  }, "values_data"_a, "values_elements"_a, "vectors_data"_a, "vectors_elements"_a)
+    if (sort) cobj.sort();
+  }, "values_data"_a, "values_elements"_a, "vectors_data"_a, "vectors_elements"_a, "sort"_a=false)
 
   //.def_property_readonly("data", /*get data*/ [](Class& cobj){ return av2np_shape(cobj.data().data(), cobj.data().shape(), false);})
   .def_property_readonly("values",[](Class& cobj){
@@ -92,7 +94,8 @@ void declare_bztrellisq(py::module &m, const std::string &typestr){
     // py::array_t<T> pyvals, py::array_t<int, py::array::c_style> pyvalelrl,
     // py::array_t<R> pyvecs, py::array_t<int, py::array::c_style> pyvecelrl
     py::array_t<T> pyvals, py::array_t<int> pyvalel, py::array_t<double> pyvalwght,
-    py::array_t<R> pyvecs, py::array_t<int> pyvecel, py::array_t<double> pyvecwght
+    py::array_t<R> pyvecs, py::array_t<int> pyvecel, py::array_t<double> pyvecwght,
+    bool sort
   ){
     ArrayVector<T> vals;
     ArrayVector<R> vecs;
@@ -109,7 +112,8 @@ void declare_bztrellisq(py::module &m, const std::string &typestr){
     cobj.replace_vector_data(vecs, vec_sh, vec_el, vec_rl);
     cobj.set_value_cost_info(val_sf, val_vf, val_wght);
     cobj.set_vector_cost_info(vec_sf, vec_vf, vec_wght);
-  }, "values_data"_a, "values_elements"_a, "values_weights"_a,"vectors_data"_a, "vectors_elements"_a, "vectors_weights"_a)
+    if (sort) cobj.sort();
+  }, "values_data"_a, "values_elements"_a, "values_weights"_a,"vectors_data"_a, "vectors_elements"_a, "vectors_weights"_a, "sort"_a=false)
 
   //.def_property_readonly("data", /*get data*/ [](Class& cobj){ return av2np_shape(cobj.data().data(), cobj.data().shape(), false);})
   .def_property_readonly("values",[](Class& cobj){
@@ -196,7 +200,6 @@ void declare_bztrellisq(py::module &m, const std::string &typestr){
 
   // .def("__repr__",&Class::to_string)
   //
-  //.def("sort",[](Class& cobj){return cobj.sort();})
   .def("sort",&Class::sort)
   ;
 }

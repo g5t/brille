@@ -500,30 +500,7 @@ public:
   ArrayVector<double> debye_waller(const A<double>& Q, const std::vector<double>& M, const double t_K) const{
     return data_.debye_waller(Q,M,t_K);
   }
-  void sort(void){
-    // determine all unique keys for the sorting permutation map
-    std::set<size_t> permutation_table_keys = this->collect_keys();
-    info_update("Found a total of ",permutation_table_keys.size()," connections between the ",vertices_.size()," vertices");
-    data_.initialize_permutation_table(permutation_table_keys);
-    // find the keys corresponding to the triangular half of the matrix (i<j)
-    std::vector<std::array<size_t,2>> tri_ij;
-    tri_ij.reserve(permutation_table_keys.size()/2);
-    size_t nv = vertices_.size();
-    for (const auto & key: permutation_table_keys){
-      size_t i = key/nv;
-      if (i*(nv+1)<key) tri_ij.push_back({i, key-i*nv});
-    }
-    // so that we can find all of their permutations in parallel
-    std::mutex map_mutex;
-    long long nkeys = unsigned_to_signed<long long, size_t>(tri_ij.size());
-    #pragma omp parallel for default(none) shared(tri_ij, map_mutex, nkeys)
-    for(long long ski=0; ski<nkeys; ++ski){
-      size_t ki = signed_to_unsigned<size_t, long long>(ski);
-      data_.consensus_sort(tri_ij[ki][0], tri_ij[ki][1], map_mutex);
-    }
-    info_update("Sorting finished");
-  }
-
+  void sort(void){ data_.sort(); }
 private:
   bool subscript_ok_and_not_null(const std::array<index_t,3>& sub) const {
     return this->subscript_ok(sub) && !nodes_.is_null(this->sub2idx(sub));

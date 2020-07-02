@@ -47,7 +47,8 @@ void declare_bzmeshq(py::module &m, const std::string &typestr){
 
   .def("fill",[](Class& cobj,
     py::array_t<T> pyvals, py::array_t<int, py::array::c_style> pyvalelrl,
-    py::array_t<R> pyvecs, py::array_t<int, py::array::c_style> pyvecelrl
+    py::array_t<R> pyvecs, py::array_t<int, py::array::c_style> pyvecelrl,
+    bool sort
   ){
     ArrayVector<T> vals;
     ArrayVector<R> vecs;
@@ -60,7 +61,34 @@ void declare_bzmeshq(py::module &m, const std::string &typestr){
 
     cobj.replace_value_data(vals, val_sh, val_el, val_rl);
     cobj.replace_vector_data(vecs, vec_sh, vec_el, vec_rl);
-  }, "values_data"_a, "values_elements"_a, "vectors_data"_a, "vectors_elements"_a)
+    if (sort) cobj.sort();
+  }, "values_data"_a, "values_elements"_a, "vectors_data"_a, "vectors_elements"_a, "sort"_a=false)
+
+  .def("fill",[](Class& cobj,
+    // py::array_t<T> pyvals, py::array_t<int, py::array::c_style> pyvalelrl,
+    // py::array_t<R> pyvecs, py::array_t<int, py::array::c_style> pyvecelrl
+    py::array_t<T> pyvals, py::array_t<int> pyvalel, py::array_t<double> pyvalwght,
+    py::array_t<R> pyvecs, py::array_t<int> pyvecel, py::array_t<double> pyvecwght,
+    bool sort
+  ){
+    ArrayVector<T> vals;
+    ArrayVector<R> vecs;
+    std::vector<size_t> val_sh, vec_sh;
+    std::array<element_t, 3> val_el{{0,0,0}}, vec_el{{0,0,0}};
+    std::array<double,3> val_wght{{1,1,1}}, vec_wght{{1,1,1}};
+    RotatesLike val_rl, vec_rl;
+    int val_sf{0}, val_vf{0}, vec_sf{0}, vec_vf{0};
+    size_t count = cobj.size();
+    std::tie(vals,val_sh,val_el,val_rl,val_sf,val_vf,val_wght)=fill_check(pyvals,pyvalel,pyvalwght,count);
+    std::tie(vecs,vec_sh,vec_el,vec_rl,vec_sf,vec_vf,vec_wght)=fill_check(pyvecs,pyvecel,pyvecwght,count);
+
+    cobj.replace_value_data(vals, val_sh, val_el, val_rl);
+    cobj.replace_vector_data(vecs, vec_sh, vec_el, vec_rl);
+    cobj.set_value_cost_info(val_sf, val_vf, val_wght);
+    cobj.set_vector_cost_info(vec_sf, vec_vf, vec_wght);
+    if (sort) cobj.sort();
+  }, "values_data"_a, "values_elements"_a, "values_weights"_a,"vectors_data"_a, "vectors_elements"_a, "vectors_weights"_a, "sort"_a=false)
+
 
   .def_property_readonly("values",[](Class& cobj){
     const auto & v{cobj.data().values()};
@@ -70,16 +98,6 @@ void declare_bzmeshq(py::module &m, const std::string &typestr){
     const auto & v{cobj.data().vectors()};
     return av2np_shape(v.data(), v.shape(), false);
   })
-
-  .def("multi_sort_perm",
-    [](Class& cobj, const double wS, const double wV,
-                    const double wM, const int vwf){
-    return av2np(cobj.multi_sort_perm(wS,wV,wM,vwf));
-  }, "scalar_cost_weight"_a=1,
-     "vector_cost_weight"_a=1,
-     "matrix_cost_weight"_a=1,
-     "vector_weight_function"_a=0
-  )
 
   .def("ir_interpolate_at",[](Class& cobj,
                            py::array_t<double> pyX,
@@ -127,7 +145,10 @@ void declare_bzmeshq(py::module &m, const std::string &typestr){
     for (size_t i=0; i<static_cast<size_t>(mi.shape[0]); ++i) masses.push_back(mass_ptr[i*span]);
     return av2np_squeeze(cobj.debye_waller(cQ, masses, temp_k));
   }, "Q"_a, "masses"_a, "Temperature_in_K"_a)
-  .def("__repr__",&Class::to_string);
+  .def("__repr__",&Class::to_string)
+
+  .def("sort",&Class::sort)
+  ;
 }
 
 #endif

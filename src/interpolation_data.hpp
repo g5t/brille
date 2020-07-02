@@ -640,16 +640,16 @@ public:
   RotatesLike vectors_rotate_like(const RotatesLike a){ return vectors_.rotateslike(a); }
   //
   template<typename I, typename=std::enable_if_t<std::is_integral<I>::value> >
-  void interpolate_at(const std::vector<I>&, const std::vector<double>&, ArrayVector<T>&, ArrayVector<R>&, const size_t);
+  void interpolate_at(const std::vector<I>&, const std::vector<double>&, ArrayVector<T>&, ArrayVector<R>&, const size_t) const;
   template<typename I, typename=std::enable_if_t<std::is_integral<I>::value> >
-  void interpolate_at(const std::vector<std::pair<I,double>>&, ArrayVector<T>&, ArrayVector<R>&, const size_t);
+  void interpolate_at(const std::vector<std::pair<I,double>>&, ArrayVector<T>&, ArrayVector<R>&, const size_t) const;
   //
   template<typename I, typename=std::enable_if_t<std::is_integral<I>::value> >
-  std::vector<int_t> get_permutation(const I, const I);
+  std::vector<int_t> get_permutation(const I, const I) const;
   template<typename I, typename=std::enable_if_t<std::is_integral<I>::value> >
-  std::vector<std::vector<int_t>> get_permutations(const std::vector<I>&);
+  std::vector<std::vector<int_t>> get_permutations(const std::vector<I>&) const;
   template<typename I, typename=std::enable_if_t<std::is_integral<I>::value> >
-  std::vector<std::vector<int_t>> get_permutations(const std::vector<std::pair<I,double>>&);
+  std::vector<std::vector<int_t>> get_permutations(const std::vector<std::pair<I,double>>&) const;
   //
 //  bool rotate_in_place(ArrayVector<T>& vals, ArrayVector<R>& vecs, const std::vector<std::array<int,9>>& r) const {
 //    return values_.rotate_in_place(vals, r) && vectors_.rotate_in_place(vecs, r);
@@ -662,16 +662,20 @@ public:
   template<typename... A> void replace_value_data(A... args) {
     values_.replace_data(args...);
     this->validate_vectors();
-    this->permutation_table_ = PermutationTable(this->size(), this->branches());
+    this->update_permutation_table();
   }
   template<typename... A> void replace_vector_data(A... args) {
     vectors_.replace_data(args...);
     this->validate_values();
-    this->permutation_table_ = PermutationTable(this->size(), this->branches());
+    this->update_permutation_table();
   }
-  //
-  void initialize_permutation_table(const std::set<size_t>& keys){
-    this->permutation_table_ = PermutationTable(this->size(), this->branches(), keys);
+  // used during holding-object initialisation
+  void initialize_permutation_table(const size_t nverts, const std::set<size_t>& keys){
+    this->permutation_table_ = PermutationTable(nverts, this->branches(), keys);
+  }
+  void update_permutation_table(){
+    // preserve the keys in the permutation table, if possible
+    this->permutation_table_.refresh(this->size(), this->branches());
   }
   //
   void set_value_cost_info(const int csf, const int cvf, const ElementsCost& elcost){
@@ -706,8 +710,9 @@ public:
     return values_.any_equal_modes(idx);
     // we could try and do something fancier, but it's probaby not useful.
   }
+  void sort(void);
   template<typename I, typename=std::enable_if_t<std::is_integral<I>::value>>
-  bool consensus_sort(const I i, const I j, std::mutex& map_mutex);
+  bool determine_permutation_ij(const I i, const I j, std::mutex& map_mutex);
 private:
   ArrayVector<double> debye_waller_sum(const ArrayVector<double>& Q, const double t_K) const;
   ArrayVector<double> debye_waller_sum(const LQVec<double>& Q, const double beta) const{ return this->debye_waller_sum(Q.get_xyz(), beta); }
@@ -785,7 +790,7 @@ InterpolationData<T,R>::interpolate_at(
   ArrayVector<T>& values_out,
   ArrayVector<R>& vectors_out,
   const size_t to
-){
+) const {
   std::vector<std::vector<int_t>> permutations = this->get_permutations(indices);
   values_.interpolate_at(permutations, indices, weights, values_out, to, false);
   vectors_.interpolate_at(permutations, indices, weights, vectors_out, to, true);
@@ -798,41 +803,46 @@ InterpolationData<T,R>::interpolate_at(
   ArrayVector<T>& values_out,
   ArrayVector<R>& vectors_out,
   const size_t to
-){
+) const {
   std::vector<std::vector<int_t>> permutations = this->get_permutations(indices_weights);
   values_.interpolate_at(permutations, indices_weights, values_out, to, false);
   vectors_.interpolate_at(permutations, indices_weights, vectors_out, to, true);
 }
 
+// template<class T, class R> template<typename I, typename>
+// std::vector<int_t>
+// InterpolationData<T,R>::get_permutation(const I i, const I j) const {
+//   std::vector<int_t> perm;
+//   /*
+//   Since missing permutations are added, and might be the same for two threads,
+//   we can not allow multiple threads to perform their get call at the same time
+//   otherwise the table might end up with Nthread copies of every unique
+//   permutation vector.
+//   This is probably an unacceptable performance hit.
+//   */
+//   #pragma omp critical
+//   {
+//     perm = permutation_table_.safe_get(i, j);
+//     // perm is empty if i:j is not present in the table
+//     if (perm.empty()){
+//       jv_permutation_fill(this->cost_matrix(i, j), perm);
+//       permutation_table_.set(i, j, perm);
+//     }
+//   }
+//   // jv_permutation_fill(this->cost_matrix(i, j), perm);
+//   // perm = jv_permutation(this->cost_matrix(i, j));
+//   // and return it
+//   return perm;
+// }
 template<class T, class R> template<typename I, typename>
 std::vector<int_t>
-InterpolationData<T,R>::get_permutation(const I i, const I j) {
-  std::vector<int_t> perm;
-  /*
-  Since missing permutations are added, and might be the same for two threads,
-  we can not allow multiple threads to perform their get call at the same time
-  otherwise the table might end up with Nthread copies of every unique
-  permutation vector.
-  This is probably an unacceptable performance hit.
-  */
-  #pragma omp critical
-  {
-    perm = permutation_table_.safe_get(i, j);
-    // perm is empty if i:j is not present in the table
-    if (perm.empty()){
-      jv_permutation_fill(this->cost_matrix(i, j), perm);
-      permutation_table_.set(i, j, perm);
-    }
-  }
-  // jv_permutation_fill(this->cost_matrix(i, j), perm);
-  // perm = jv_permutation(this->cost_matrix(i, j));
-  // and return it
-  return perm;
+InterpolationData<T,R>::get_permutation(const I i, const I j) const {
+  return permutation_table_.safe_get(i, j);
 }
 
 template<class T, class R> template<typename I, typename>
 std::vector<std::vector<int_t>>
-InterpolationData<T,R>::get_permutations(const std::vector<I>& indices){
+InterpolationData<T,R>::get_permutations(const std::vector<I>& indices) const {
   std::vector<std::vector<int_t>> perms;
   // find the minimum index so that permutation(pvt,idx) is always ordered
   I pvt{indices[0]};
@@ -842,7 +852,7 @@ InterpolationData<T,R>::get_permutations(const std::vector<I>& indices){
 }
 template<class T, class R> template<typename I, typename>
 std::vector<std::vector<int_t>>
-InterpolationData<T,R>::get_permutations(const std::vector<std::pair<I,double>>& iw){
+InterpolationData<T,R>::get_permutations(const std::vector<std::pair<I,double>>& iw) const {
   std::vector<std::vector<int_t>> perms;
   I pvt{iw[0].first};
   //for (const auto piw: iw) if (piw.first < pvt) pvt = piw.first;
@@ -864,9 +874,32 @@ InterpolationData<T,R>::cost_matrix(const I i0, const I i1) const {
   return cost;
 }
 
+template<class T, class R>
+void InterpolationData<T,R>::sort(void){
+  std::set<size_t> keys = permutation_table_.keys();
+  // find the keys corresponding to one triangular part of the matrix (i<j)
+  std::vector<std::array<size_t,2>> tri_ij;
+  tri_ij.reserve(keys.size()/2);
+  size_t no = this->size();
+  for (const auto & key: keys){
+    size_t i = key/no;
+    if (i*(no+1) < key) tri_ij.push_back({i, key-i*no});
+  }
+  info_update("Finding permutations for ",keys.size()," connections between the ",no," vertices");
+  // now find the permutations in parallel
+  std::mutex m;
+  long long nok = unsigned_to_signed<long long, size_t>(tri_ij.size());
+  #pragma omp parallel for default(none) shared(tri_ij, m, nok)
+  for (long long sk=0; sk<nok; ++sk){
+    size_t k = signed_to_unsigned<size_t, long long>(sk);
+    this->determine_permutation_ij(tri_ij[k][0], tri_ij[k][1], m);
+  }
+  info_update("Done");
+}
+
 template<class T, class R> template<typename I, typename>
 bool
-InterpolationData<T,R>::consensus_sort(const I i, const I j, std::mutex& map_mutex){
+InterpolationData<T,R>::determine_permutation_ij(const I i, const I j, std::mutex& map_mutex){
   // if (!permutation_table_.value_needed(i,j)) return false;
   std::vector<int_t> row, col;
   jv_permutation_fill(this->cost_matrix(i,j), row, col);

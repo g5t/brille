@@ -60,6 +60,18 @@ public:
 		for (size_t k: kys) ijmap.emplace(k, 0u); // 0u ≡ not-yet-added value
 	};
 public:
+	bool refresh(const size_t ni, const size_t br){
+		bool invalidated{false};
+		if (ni != this->IndexSize){
+			info_update("Resizing the PermutationTable is probably not what you wanted");
+			this->ijmap.clear();
+			this->IndexSize = ni;
+			invalidated = true;
+		}
+		for (auto& itr: ijmap) itr.second = 0u; // all mapped values reset to the invalid value
+		this->add_zeroth(br);
+		return invalidated;
+	}
 	std::map<size_t,size_t>::const_iterator find(const size_t i, const size_t j) const {
 		auto itr = this->ij2key(i,j);
 		return ijmap.find(itr);
@@ -72,13 +84,6 @@ public:
 		auto itr = this->find(i,j);
 		return itr != ijmap.end() && itr->second < offset;
 	}
-	// size_t set(const size_t i, const size_t j, const size_t idx){
-	// 	size_t key = this->ij2key(i,j);
-	// 	auto itr = ijmap.find(key);
-	// 	if (itr != ijmap.end()) return itr->second;
-	// 	ijmap.emplace(key, idx);
-	// 	return idx;
-	// }
 	size_t set(const size_t i, const size_t j, const std::vector<int_t>& v){
 		bool contains{false};
 		size_t idx{0};
@@ -115,7 +120,20 @@ public:
 	std::vector<int_t> safe_get(const size_t i, const size_t j) const {
 		auto itr = this->find(i,j);
 		bool actually_present = itr != ijmap.end() && itr->second >= offset;
-		return actually_present ? permutations[itr->second - offset] : std::vector<int_t>();
+		// return actually_present ? permutations[itr->second - offset] : std::vector<int_t>();
+		return permutations[actually_present ? itr->second - offset : 0];
+	}
+	std::set<size_t> keys() const {
+		std::set<size_t> k;
+		for (auto ij: ijmap) k.insert(ij.first);
+		return k;
+	}
+	std::set<size_t> insert_keys(const std::set<size_t>& ks) {
+		for (auto k: ks){
+			std::map<size_t,size_t>::iterator itr = ijmap.find(k);
+			if(itr == ijmap.end()) ijmap.emplace(k, 0u); // value=0u ≡ invalid-value
+		}
+		return this->keys();
 	}
 private:
 	size_t ij2key(const size_t i, const size_t j) const { return i==j ? 0u : i*IndexSize+j; }
@@ -136,7 +154,7 @@ private:
 		std::vector<int_t> identity(branches);
 		std::iota(identity.begin(), identity.end(), 0);
 		permutations.push_back(identity);
-		ijmap.emplace(0u, 0u+offset); // offset first valid value
+		ijmap[0u] = 0u + offset;// offset first valid value
 	}
 };
 

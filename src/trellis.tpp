@@ -205,6 +205,8 @@ PolyhedronTrellis<T,R>::PolyhedronTrellis(const Polyhedron& poly, const double m
   // Now all non-null nodes have been populated with the indices of their vertices
   // Combine the retained trellis vertices and the extra triangulated vertices
   vertices_ = cat(kept_intersections, extra_intersections.first(nExtra));
+  // the InterpolationData PermutationTable should be initialised now:
+  data_.initialize_permutation_table(vertices_.size(), this->collect_keys());
 }
 
 template<class T,class S>
