@@ -288,7 +288,7 @@ neighbouring vertices for two connected vertices in a relational mesh.
 // }
 template<class T,class S>
 size_t
-PolyhedronTrellis<T,S>::consensus_sort_nodes(const index_t first_idx,
+PolyhedronTrellis<T,S>::sort_nodes(const index_t first_idx,
   std::vector<SortingStatus>& node_status, std::vector<SortingStatus>& vertex_status)
 {
   std::queue<index_t> queue;
@@ -296,7 +296,7 @@ PolyhedronTrellis<T,S>::consensus_sort_nodes(const index_t first_idx,
   size_t num_sorted=0;
   std::atomic<int> num_working{0};
   std::condition_variable cv;
-  std::mutex queue_mutex;
+  std::mutex queue_mutex, map_mutex;
   #pragma omp parallel
   {
     ++num_working;
@@ -332,12 +332,12 @@ PolyhedronTrellis<T,S>::consensus_sort_nodes(const index_t first_idx,
       queue.pop();
       node_status[idx].queued(false);
       node_status[idx].claimed(true);
-      std::cout << std::setw(2) << "thread " << omp_get_thread_num() << " working on " << idx << std::endl;
+      //std::cout << std::setw(2) << "thread " << omp_get_thread_num() << " working on " << idx << std::endl;
       lk.unlock();
 
       // handle this node and get back a list of neighbours which were, at the
       // time not sorted, not fixed, not queued, and not claimed
-      std::vector<index_t> upnext = this->handle_one_node(idx, node_status, vertex_status);
+      std::vector<index_t> upnext = this->sort_node(idx, node_status, vertex_status, map_mutex);
       // hard work done; wait for a lock to edit the node_status and queue
       lk.lock();
       // indicate that this node is done and give up our claim to it
@@ -358,15 +358,16 @@ PolyhedronTrellis<T,S>::consensus_sort_nodes(const index_t first_idx,
 
 template<class T, class S>
 std::vector<index_t>
-PolyhedronTrellis<T,S>::handle_one_node(
+PolyhedronTrellis<T,S>::sort_node(
   const index_t idx,
-  std::vector<SortingStatus>& nstat, std::vector<SortingStatus>& vstat
+  std::vector<SortingStatus>& nstat, std::vector<SortingStatus>& vstat,
+  std::mutex& map_mutex
 ){
   const size_t max_visits{100};
   std::vector<index_t> return_value;
   bool sort_result{false};
   if (nstat[idx].unlocked_addvisit_unsorted(max_visits))
-    sort_result = this->consensus_sort_node(idx, vstat);
+    sort_result = this->sort_node_type(idx, vstat, map_mutex);
   auto queable = [](const SortingStatus & s){ return s.is_queable(); };
   if (!nstat[idx].locked()){
     return_value = this->which_node_neighbours(nstat, queable, idx);
@@ -377,26 +378,112 @@ PolyhedronTrellis<T,S>::handle_one_node(
 
 
 template<class T,class S>
-bool PolyhedronTrellis<T,S>::consensus_sort_node(
-  const index_t node, std::vector<SortingStatus>& vstat
+bool PolyhedronTrellis<T,S>::sort_node_type(
+  const index_t node, std::vector<SortingStatus>& vstat, std::mutex& map_mutex
 ) {
   bool all_done{true};
   using TetIdx = std::array<index_t,4>;
   // add a check here for degenerate mode(s)?
   if (nodes_.is_poly(node)){
     // in the case of a polynode we can exploit the inner connectivity
-    // but we need to start from tetrahedra that have sorted vertices
+    // but we need to start from tetrahedra that have handled vertices
     std::vector<TetIdx> tets = nodes_.vertices_per_tetrahedron(node);
-    auto sorted = [&](const index_t i){return vstat[i].sorted();};
-    auto scount = [&](const TetIdx& t){return std::count_if(t.begin(), t.end(), sorted);};
-    auto bigger = [&](const TetIdx& t1, const TetIdx& t2){return scount(t1) > scount(t2);};
-    std::sort(tets.begin(), tets.end(), bigger);
+    auto hndld = [&](const index_t i){return vstat[i].sorted();};
+    auto hdlct = [&](const TetIdx& t){return std::count_if(t.begin(), t.end(), hndld);};
+    auto mhdld = [&](const TetIdx& t1, const TetIdx& t2){return hdlct(t1) > hdlct(t2);};
+    std::sort(tets.begin(), tets.end(), mhdld);
     for (auto vi_t: tets) for (auto vi: vi_t)
-      all_done &= data_.consensus_sort(vi_t.begin(), vi_t.end(), vi, vstat);
+      all_done &= data_.consensus_sort(vi_t.begin(), vi_t.end(), vi, vstat, map_mutex);
   } else {
     std::vector<index_t> vi_n = nodes_.vertices(node);
     for (auto vi: vi_n)
-      all_done &= data_.consensus_sort(vi_n.begin(), vi_n.end(), vi, vstat);
+      all_done &= data_.consensus_sort(vi_n.begin(), vi_n.end(), vi, vstat, map_mutex);
   }
   return all_done;
+}
+
+
+
+template<class T,class S>
+std::set<size_t>
+PolyhedronTrellis<T,S>::collect_keys(
+  const index_t first_idx, std::vector<SortingStatus>& node_status)
+{
+  auto queable = [](const SortingStatus & s){ return s.is_queable(); };
+  std::queue<index_t> queue;
+  queue.push(first_idx);
+  std::atomic<int> num_working{0};
+  std::condition_variable cv;
+  std::mutex queue_mutex;
+  std::set<size_t> keys;
+  #pragma omp parallel
+  {
+    ++num_working;
+    while (true) {
+      std::unique_lock<std::mutex> lk(queue_mutex);
+      if (queue.empty()){
+        --num_working;
+        if (num_working < 1){
+          cv.notify_all();
+          break;
+        }
+        do {
+          cv.wait(lk);
+        } while (num_working > 0 && queue.empty());
+        if (num_working < 1 && queue.empty()) break;
+        ++num_working;
+      }
+      index_t idx = queue.front();
+      queue.pop();
+      node_status[idx].queued(false);
+      node_status[idx].claimed(true);
+      lk.unlock();
+
+      // handle this node and get back a list of neighbours which were, at the
+      // time not sorted, not fixed, not queued, and not claimed
+      std::set<index_t> idx_keys = this->collect_keys_node(idx, node_status);
+      std::vector<index_t> upnext;
+      if (!node_status[idx].locked())
+        upnext = this->which_node_neighbours(node_status, queable, idx);
+      // hard work done; wait for a lock to edit the node_status and queue
+      lk.lock();
+      // ensure we copy the keys inside the locked region
+      keys.insert(idx_keys.begin(), idx_keys.end());
+      // indicate that this node is done and give up our claim to it
+      node_status[idx].sorted(true);
+      node_status[idx].claimed(false);
+      // double check that none of neighbouring nodes have been sneakily
+      // handled while we were waiting for a lock:
+      for (index_t un: upnext) if(node_status[un].is_queable()) {
+        queue.push(un);
+        node_status[un].queued(true);
+        cv.notify_one();
+      }
+      lk.unlock();
+    }
+  }
+  return keys;
+}
+
+template<class T, class S>
+std::set<size_t>
+PolyhedronTrellis<T,S>::collect_keys_node(
+  const index_t node, std::vector<SortingStatus>& nstat
+){
+  const size_t max_visits{100};
+  std::set<size_t> keys;
+  if (nstat[node].unlocked_addvisit_unsorted(max_visits)){
+    if (nodes_.is_poly(node)){
+      // in the case of a polynode we must exploit the inner connectivity
+      std::vector<std::array<index_t,4>> tets = nodes_.vertices_per_tetrahedron(node);
+      for (auto vt: tets){
+        std::set<size_t> tmp = permutation_table_keys_from_indicies(vt.begin(), vt.end(), vertices_.size());
+        keys.insert(tmp.begin(), tmp.end());
+      }
+    } else {
+      std::vector<index_t> vn = nodes_.vertices(node);
+      keys = permutation_table_keys_from_indicies(vn.begin(), vn.end(), vertices_.size());
+    }
+  }
+  return keys;
 }

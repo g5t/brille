@@ -520,7 +520,14 @@ public:
     // and arbitrarily say this vertex *is* sorted, locked, and has been visited once
     vertex_status[idx] = SortingStatus(true, true, 1u);
     //
-    this->consensus_sort_nodes(node_lin, node_status, vertex_status);
+    std::set<size_t> permutation_table_keys = this->collect_keys(node_lin, node_status);
+    info_update("Found a total of ",permutation_table_keys.size()," connections between the ",vertices_.size()," vertices");
+    data_.initialize_permutation_table(permutation_table_keys);
+
+    // reset the node status vector
+    std::fill(node_status.begin(), node_status.end(), SortingStatus(0));
+    // now do the actual permutation-determination
+    this->sort_nodes(node_lin, node_status, vertex_status);
     //
     auto is_sorted = [](const SortingStatus& s){return s.sorted();};
     auto is_locked = [](const SortingStatus& s){return s.locked();};
@@ -600,13 +607,12 @@ private:
     for (index_t n: this->node_neighbours(node)) if (ufunc(t[n])) out.push_back(n);
     return out;
   }
-  size_t consensus_sort_nodes(
-    const index_t first_idx,
-    std::vector<SortingStatus>& node_status,
-    std::vector<SortingStatus>& vertex_status
-  );
-  std::vector<index_t> handle_one_node(const index_t, std::vector<SortingStatus>&, std::vector<SortingStatus>&);
-  bool consensus_sort_node(const index_t, std::vector<SortingStatus>&);
+  size_t sort_nodes(const index_t, std::vector<SortingStatus>&, std::vector<SortingStatus>&);
+  std::vector<index_t> sort_node(const index_t, std::vector<SortingStatus>&, std::vector<SortingStatus>&, std::mutex&);
+  bool sort_node_type(const index_t, std::vector<SortingStatus>&, std::mutex&);
+  //
+  std::set<size_t> collect_keys(const index_t, std::vector<SortingStatus>&);
+  std::set<size_t> collect_keys_node(const index_t, std::vector<SortingStatus>&);
 };
 
 #include "trellis.tpp"
