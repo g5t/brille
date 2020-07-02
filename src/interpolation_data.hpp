@@ -706,8 +706,8 @@ public:
     return values_.any_equal_modes(idx);
     // we could try and do something fancier, but it's probaby not useful.
   }
-  template<typename Itr, typename I=typename std::iterator_traits<Itr>::value_type>
-  bool consensus_sort(Itr, Itr, const I, std::vector<SortingStatus>&, std::mutex&);
+  template<typename I, typename=std::enable_if_t<std::is_integral<I>::value>>
+  bool consensus_sort(const I i, const I j, std::mutex& map_mutex);
 private:
   ArrayVector<double> debye_waller_sum(const ArrayVector<double>& Q, const double t_K) const;
   ArrayVector<double> debye_waller_sum(const LQVec<double>& Q, const double beta) const{ return this->debye_waller_sum(Q.get_xyz(), beta); }
@@ -864,103 +864,17 @@ InterpolationData<T,R>::cost_matrix(const I i0, const I i1) const {
   return cost;
 }
 
-// template<class T, class R> template<typename Itr, typename I>
-// bool
-// InterpolationData<T,R>::consensus_sort(Itr n_beg, Itr n_end, const I i, std::vector<SortingStatus>& status, std::mutex& map_mutex){
-//   // we need the value type from the provided iterator
-//   //using I = typename std::iterator_traits<Itr>::value_type;
-//   // track the number of visits to the vertex
-//   status[i].addvisit();
-//   // if this vertex has not been sorted and has not been locked
-//   if (!status[i].sorted() && !status[i].locked()){
-//     // attempt to sort it by finding the neighbours which have been sorted
-//     std::vector<I> sorted;
-//     std::copy_if(n_beg, n_end, std::back_inserter(sorted),
-//       [&](const I j){return (j!=i && status[j].sorted());});
-//     if (!sorted.empty()){
-//       // collect the relative sorting permutation(s) for all sorted neighbours
-//       std::vector<std::vector<int_t>> pij, pji;
-//       for (auto j: sorted){
-//         std::vector<int_t> row, col;
-//         jv_permutation_fill(this->cost_matrix(i, j), row, col);
-//         pij.push_back(row);
-//         pji.push_back(col);
-//       }
-//       // if the permutations are all identical (all of pij or all of pji)
-//       bool identical = std::all_of(pij.begin(), pij.end(),[p0=pij[0]](const std::vector<int_t>& p){return std::equal(p.begin(), p.end(), p0.begin());});
-//       // then we can safely permute the data at vertex i, and it is sorted
-//       std::unique_lock<std::mutex> lk1(map_mutex);
-//       if (identical) {
-//         this->permute_modes(i, pji[0]);
-//         status[i].sorted(true);
-//         for (size_t z=0; z<sorted.size(); ++z){
-//           permutation_table_.overwrite(i, sorted[z], 0u);
-//           permutation_table_.overwrite(sorted[z], i, 0u);
-//         }
-//       // otherwise we can not permute the data and must track the permutations
-//       } else for (size_t z=0; z<sorted.size(); ++z){
-//         permutation_table_.overwrite(i, sorted[z], pij[z]);
-//         permutation_table_.overwrite(sorted[z], i, pji[z]);
-//       }
-//       lk1.unlock();
-//     }
-//   }
-//   // Whether or not this vertex has been sorted or locked we need to check
-//   // if any neighbouring vertices have been locked but were not sorted.
-//   // If so we must track their permutation(s) relative to this vertex too.
-//   std::vector<I> locked;
-//   std::copy_if(n_beg, n_end, std::back_inserter(locked),
-//     [&](const I j){return (j!=i && status[j].locked() && !status[j].sorted()) && permutation_table_.value_needed(i,j);});
-//   // only calculate the permutation if it isn't already present
-//   if (locked.size()>0) {
-//     std::vector<std::vector<int_t>> pil(locked.size()), pli(locked.size());
-//     for (size_t j=0; j<locked.size(); ++j)
-//       jv_permutation_fill(this->cost_matrix(i, locked[j]), pil[j], pli[j]);
-//     std::unique_lock<std::mutex> lk2(map_mutex);
-//     for (size_t j=0; j<locked.size(); ++j){
-//       permutation_table_.overwrite(i, locked[j], pil[j]);
-//       permutation_table_.overwrite(locked[j], i, pli[j]);
-//     }
-//     lk2.unlock();
-//   }
-//   // lock this vertex to indicate that it's been dealt with
-//   status[i].locked(true);
-//   // for legacy reasons(?) return true no matter what
-//   return true;
-// }
-
-template<class T, class R> template<typename Itr, typename I>
+template<class T, class R> template<typename I, typename>
 bool
-InterpolationData<T,R>::consensus_sort(Itr n_beg, Itr n_end, const I i, std::vector<SortingStatus>& status, std::mutex& map_mutex){
-  // track the number of visits to the vertex
-  status[i].addvisit();
-  // ensure that we skip over this vertex if it has been visited too much
-  if (status[i].locked()) return false; // this shouldn't ever happen, hopefully
-  // find the connected vertices which have been handled and which are not
-  // fully present in the permutation table
-  std::vector<I> n_handled;
-  std::copy_if(n_beg, n_end, std::back_inserter(n_handled),
-    [&](const I j){return (j!=i && status[j].sorted()) && permutation_table_.value_needed(i,j);});
-  size_t count{n_handled.size()};
-  if (count>0) {
-    // find the permutations pᵢⱼ and pⱼᵢ for each of the half-handled pairs
-    std::vector<std::vector<int_t>> pij(count), pji(count);
-    for (size_t j=0; j<count; ++j)
-      jv_permutation_fill(this->cost_matrix(i, n_handled[j]), pij[j], pji[j]);
-    // store the permutations in the table
-    std::unique_lock<std::mutex> map_lock(map_mutex);
-    for (size_t j=0; j<count; ++j){
-      permutation_table_.overwrite(i, n_handled[j], pij[j]);
-      permutation_table_.overwrite(n_handled[j], i, pji[j]);
-    }
-    map_lock.unlock();
-    // indicate that this vertex has been dealt with
-    status[i].sorted(true);
-    // the method did something
-    return true;
-  }
-  // no already-handled neighbours means this method did nothing.
-  return false;
+InterpolationData<T,R>::consensus_sort(const I i, const I j, std::mutex& map_mutex){
+  // if (!permutation_table_.value_needed(i,j)) return false;
+  std::vector<int_t> row, col;
+  jv_permutation_fill(this->cost_matrix(i,j), row, col);
+  std::unique_lock<std::mutex> map_lock(map_mutex);
+  permutation_table_.overwrite(i, j, row);
+  permutation_table_.overwrite(j, i, col);
+  map_lock.unlock();
+  return true;
 }
 
 #endif

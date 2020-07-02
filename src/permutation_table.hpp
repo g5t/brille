@@ -18,6 +18,7 @@
 #define PERMUTATION_TABLE_HPP_
 
 #include <map>
+#include <set>
 #include <array>
 #include <tuple>
 #include <vector>
@@ -143,9 +144,7 @@ template<typename Itr>
 std::set<size_t>
 permutation_table_keys_from_indicies(Itr i_beg, Itr i_end, const size_t n){
 	std::set<size_t> keys;
-	for (Itr j=i_beg; j!=i_end; ++j)
-	for (Itr k=j+1; k!=i_end; ++k)
-	if (*j!=*k){
+	for (Itr j=i_beg; j!=i_end; ++j) for (Itr k=j+1; k!=i_end; ++k) if (*j!=*k){
 		keys.insert((*j)*n + (*k));
 		keys.insert((*j) + (*k)*n);
 	}

@@ -500,52 +500,28 @@ public:
   ArrayVector<double> debye_waller(const A<double>& Q, const std::vector<double>& M, const double t_K) const{
     return data_.debye_waller(Q,M,t_K);
   }
-  //! Sort the values stored in the PolyhedronTrellis by already-sorted neighbour consensus
-  std::vector<SortingStatus> sort(void){
-    std::vector<SortingStatus> vertex_status(data_.size());
-    std::vector<SortingStatus> node_status(nodes_.size());
-
-    // Start from the node containing the  Γ point
-    ArrayVector<double> Gamma(1u, 3u, 0.);
-    std::array<index_t,3> node_sub = node_subscript(Gamma);
-    index_t node_lin = this->sub2idx(node_sub);
-    if (nodes_.is_null(node_lin))
-      throw std::runtime_error("The Gamma point must not be in a null node!");
-    // find the vertex associated with this node closest to Γ
-    std::vector<index_t> node_verts = nodes_.vertices(node_lin);
-    std::vector<double> vG_dist;
-    for (index_t & i: node_verts) vG_dist.push_back(vertices_.norm(i));
-    size_t min_vG_dist_idx = std::distance(vG_dist.begin(), std::min_element(vG_dist.begin(), vG_dist.end()));
-    index_t idx = node_verts[min_vG_dist_idx];
-    // and arbitrarily say this vertex *is* sorted, locked, and has been visited once
-    vertex_status[idx] = SortingStatus(true, true, 1u);
-    //
-    std::set<size_t> permutation_table_keys = this->collect_keys(node_lin, node_status);
+  void sort(void){
+    // determine all unique keys for the sorting permutation map
+    std::set<size_t> permutation_table_keys = this->collect_keys();
     info_update("Found a total of ",permutation_table_keys.size()," connections between the ",vertices_.size()," vertices");
     data_.initialize_permutation_table(permutation_table_keys);
-
-    // reset the node status vector
-    std::fill(node_status.begin(), node_status.end(), SortingStatus(0));
-    // now do the actual permutation-determination
-    this->sort_nodes(node_lin, node_status, vertex_status);
-    //
-    auto is_sorted = [](const SortingStatus& s){return s.sorted();};
-    auto is_locked = [](const SortingStatus& s){return s.locked();};
-    size_t node_count = std::count_if(node_status.begin(), node_status.end(), is_sorted);
-    if (node_count != nodes_.size() - nodes_.null_count()){
-      std::cout << "Successfully sorted " << node_count << " of ";
-      std::cout << nodes_.size() - nodes_.null_count() << " valid trellis nodes." << std::endl;
-    } else {
-      std::cout << "All "<< node_count << " valid trellis nodes sorted." << std::endl;
+    // find the keys corresponding to the triangular half of the matrix (i<j)
+    std::vector<std::array<size_t,2>> tri_ij;
+    tri_ij.reserve(permutation_table_keys.size()/2);
+    size_t nv = vertices_.size();
+    for (const auto & key: permutation_table_keys){
+      size_t i = key/nv;
+      if (i*(nv+1)<key) tri_ij.push_back({i, key-i*nv});
     }
-    size_t vertex_count = std::count_if(vertex_status.begin(), vertex_status.end(), is_sorted);
-    size_t locked_count = std::count_if(vertex_status.begin(), vertex_status.end(), is_locked);
-    if (vertex_count != data_.size()){
-      std::cout << "Successfully sorted " << vertex_count << " of ";
-      std::cout << data_.size() << " trellis points.";
-      std::cout << " (" << locked_count << " locked)" << std::endl;
+    // so that we can find all of their permutations in parallel
+    std::mutex map_mutex;
+    long long nkeys = unsigned_to_signed<long long, size_t>(tri_ij.size());
+    #pragma omp parallel for default(none) shared(tri_ij, map_mutex, nkeys)
+    for(long long ski=0; ski<nkeys; ++ski){
+      size_t ki = signed_to_unsigned<size_t, long long>(ski);
+      data_.consensus_sort(tri_ij[ki][0], tri_ij[ki][1], map_mutex);
     }
-    return vertex_status;
+    info_update("Sorting finished");
   }
 
 private:
@@ -607,12 +583,8 @@ private:
     for (index_t n: this->node_neighbours(node)) if (ufunc(t[n])) out.push_back(n);
     return out;
   }
-  size_t sort_nodes(const index_t, std::vector<SortingStatus>&, std::vector<SortingStatus>&);
-  std::vector<index_t> sort_node(const index_t, std::vector<SortingStatus>&, std::vector<SortingStatus>&, std::mutex&);
-  bool sort_node_type(const index_t, std::vector<SortingStatus>&, std::mutex&);
-  //
-  std::set<size_t> collect_keys(const index_t, std::vector<SortingStatus>&);
-  std::set<size_t> collect_keys_node(const index_t, std::vector<SortingStatus>&);
+  std::set<size_t> collect_keys();
+  std::set<size_t> collect_keys_node(const index_t);
 };
 
 #include "trellis.tpp"

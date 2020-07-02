@@ -196,7 +196,8 @@ void declare_bztrellisq(py::module &m, const std::string &typestr){
 
   // .def("__repr__",&Class::to_string)
   //
-  .def("sort",[](Class& cobj){return cobj.sort();})
+  //.def("sort",[](Class& cobj){return cobj.sort();})
+  .def("sort",&Class::sort)
   ;
 }
 

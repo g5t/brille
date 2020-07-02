@@ -186,7 +186,8 @@ class BrEu:
             # vecs = np.array([x[y,:,:] for (x, y) in zip(self.grid.vectors, perm)])
             self._fill_grid(frqs, vecs, vf=weight_function)
         elif sort and callable(getattr(self.grid, 'sort', None)):
-            self.grid.sortingstatus = self.grid.sort()
+            # self.grid.sortingstatus = self.grid.sort()
+            self.grid.sort()
         return frqs, vecs
 
     # pylint: disable=c0103,w0613,no-member
