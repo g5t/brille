@@ -68,8 +68,11 @@ public:
 			this->IndexSize = ni;
 			invalidated = true;
 		}
-		for (auto& itr: ijmap) itr.second = 0u; // all mapped values reset to the invalid value
-		this->add_zeroth(br);
+		if (br != permutations[0].size()){
+			for (auto& itr: ijmap) itr.second = 0u; // all mapped values reset to the invalid value
+			permutations.clear();
+			this->add_zeroth(br);
+		}
 		return invalidated;
 	}
 	std::map<size_t,size_t>::const_iterator find(const size_t i, const size_t j) const {
@@ -153,7 +156,8 @@ private:
 	void add_zeroth(size_t branches) {
 		std::vector<int_t> identity(branches);
 		std::iota(identity.begin(), identity.end(), 0);
-		permutations.push_back(identity);
+		if (permutations.size()<1) permutations.resize(1);
+		permutations[0] = identity;
 		ijmap[0u] = 0u + offset;// offset first valid value
 	}
 };
