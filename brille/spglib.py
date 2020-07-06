@@ -4,6 +4,9 @@ import spglib
 
 import brille as b
 
+from euphonic import Crystal as EuCrystal
+from euphonic import ureg
+
 class BrCell:
     def __init__(self, lattice_vectors, atom_positions, atom_types):
         self.lat = lattice_vectors
@@ -17,10 +20,11 @@ class BrCell:
         return np.allclose(np.diag(np.diag(self.lat)), self.lat)
 
 class BrSpgl:
-    def __init__(self, lattice_vectors, atom_positions, atom_types, hall=None):
-        if not issubclass(atom_types.dtype.type, np.integer):
-            _, atom_types = np.unique(atom_types, return_inverse=True)
-        self.input = BrCell(lattice_vectors, atom_positions, atom_types)
+    def __init__(self, eucr, hall=None):
+        if not isinstance(eucr, EuCrystal):
+            print("Unexpected data type {}, expect failures.".format(type(eucr)))
+        _, atom_idx = np.unique(eucr.atom_type, return_inverse=True)
+        self.input = BrCell(eucr.cell_vectors.to('angstrom').magnitude, eucr.atom_r, atom_idx)
         self.primitive = BrCell(*spglib.find_primitive(self.input.cell()))
         self.input_is_primitive = self.input.isapprox(self.primitive)
         if hall is None:
@@ -157,3 +161,9 @@ class BrSpgl:
 
     def conventional_to_orthogonal_eigenvectors(self, vecs):
         return np.einsum('ba,ijkb->ijka', self.get_conventional_basis(), vecs)
+
+class BrQωε:
+    def __init__(self, Q, ω, ε):
+        self.Q = Q
+        self.ω = ω.to('meV').magnitude if isinstance(ω, ureg.Quantity) else ω
+        self.ε = ε

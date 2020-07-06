@@ -26,11 +26,13 @@ import spglib
 from scipy import special
 from scipy.stats import norm, cauchy
 
-from euphonic.data.interpolation import InterpolationData
+from euphonic import ForceConstants
+from euphonic import QpointPhononModes as EuQpointPhononModes
+from euphonic import StructureFactor as EuStructureFactor
 from euphonic import ureg    # avoid creating a second Pint UnitRegistry
 
 import brille as br
-from brille.spglib import BrSpgl
+from brille.spglib import BrSpgl, BrQωε
 from brille.evn import degenerate_check
 
 
@@ -70,45 +72,52 @@ class BrEu:
     """
 
     # pylint: disable=r0913,r0914
-    def __init__(self, SPData,
+    def __init__(self, FCData,
                  scattering_lengths=None, cell_is_primitive=None,
                  sort=True, vf=0, hall=None, parallel=False, **kwds):
         """Initialize a new BrEu object from an existing Euphonic object."""
-        if not isinstance(SPData, InterpolationData):
+        if not isinstance(FCData, ForceConstants):
             msg = "Unexpected data type {}, expect failures."
-            print(msg.format(type(SPData)))
+            print(msg.format(type(FCData)))
+        self.data = FCData
         if not isinstance(scattering_lengths, dict):
-            scattering_lengths = {k: 1 for k in np.unique(SPData.ion_type)}
-        self.data = SPData
+            scattering_lengths = {k: 1 for k in np.unique(self.data.crystal.atom_type)}
         self.scattering_lengths = scattering_lengths
-        self.brspgl = BrSpgl(SPData.cell_vec.to('angstrom').magnitude, SPData.ion_r, SPData.ion_type, hall=hall)
+        self.brspgl = BrSpgl(self.data.crystal, hall=hall)
         # Construct the BZGrid, by default using the conventional unit cell
         grid_q = self.__define_grid(**kwds)
         # Calculate ωᵢ(Q) and ⃗ϵᵢⱼ(Q), and fill the BZGrid:
         # Select only those keyword arguments which Euphonic expects:
-        cfp_keywords = ('asr', 'precondition', 'set_attrs', 'dipole',
-                        'eta_scale', 'splitting')
+        cfp_keywords = ('asr', 'dipole', 'eta_scale', 'reduce_qpts', 'fall_back_on_python')
         cfp_dict = {k: kwds[k] for k in cfp_keywords if k in kwds}
-        if parallel:
-            cfp_dict['use_c'] = True
-            cfp_dict['n_threads'] = half_cpu_count()
-        # calculate_fine_phonos returns the frequencies and eigenvectors
+        # splitting and insert_gamma can modify the number of returned Q points
+        # ensure we provide sensible (for brille) defaults
+        cfp_dict['splitting'] = kwds.get('splitting', False)
+        cfp_dict['insert_gamma'] = kwds.get('insert_gamma', False)
+        # the parallel keyword should apply to the Euphonic code too, unless
+        # if use_c is already present
+        cfp_dict['use_c'] = kwds.get('use_c', parallel)
+        if cfp_dict['use_c']:
+            cfp_dict['n_threads'] = kwds.get('n_threads', half_cpu_count())
+        if cfp_dict['splitting'] or cfp_dict['insert_gamma']:
+            print('Options which modify the number of Q points can not be used with brille. Expect problems.')
+        # calculate_qpoint_phonon_modes returns the frequencies and eigenvectors
         # equivalent to the properties .freqs and .eigenvecs
         # but we need to make sure we grab _freqs (or _reduced_freqs)
         # since Euphonic no longer attempts to handle varying units
         # internally
-        self.data.calculate_fine_phonons(grid_q, **cfp_dict)
+        qωε = self.data.calculate_qpoint_phonon_modes(grid_q, **cfp_dict)
         # freq = self.data.freqs.to('millielectron_volt').magnitude
-        freq = self.data._freqs    # (n_pt, n_br) # can this be replaced by _reduced_freqs?
-        vecs = self.data.eigenvecs # (n_pt, n_br, n_io, 3) # can this be replaced by _reduced_eigenvecs?
+        freq = qωε.frequencies.to('meV').magnitude  # (n_pt, n_br)
+        vecs = qωε.eigenvectors # (n_pt, n_br, n_io, 3)
         vecs = degenerate_check(grid_q, freq, vecs)
         self._fill_grid(freq, vecs, vf=vf, sort=sort)
         self.parallel = parallel
 
     def _fill_grid(self, freq, vecs, vf=0, sort=False):
         n_pt = self.grid.invA.shape[0]
-        n_br = self.data.n_branches
-        n_io = self.data.n_ions
+        n_io = self.data.crystal.n_atoms
+        n_br = 3*n_io
         if freq.shape == (n_pt, n_br):
             freq = freq.reshape(n_pt, n_br, 1)
         if freq.shape != (n_pt, n_br, 1):
@@ -199,28 +208,28 @@ class BrEu:
         else:
             raise Exception("keyword 'max_volume' or 'number_density' required")
 
-    def s_q(self, q_hkl, interpolate=True,  T=5.0, scale=1.0, dw_data=None, **kwargs):
+    def s_q(self, q_hkl, interpolate=True,  temperature=5.0, scale=1.0, dw=None, **kwargs):
         """Calculate Sᵢ(Q) where Q = (q_h,q_k,q_l)."""
-        self.w_q(q_hkl, interpolate=interpolate, **kwargs)
+        qωε = self.QpointPhononModes(q_hkl, interpolate=interpolate, **kwargs)
         # Finally calculate Sᵢ(Q)
         if interpolate:
-            sf = self._calculate_structure_factor(T=T, scale=scale, dw_data=dw_data)
+            sf = self._calculate_structure_factor(qωε, temperature=temperature, scale=scale, dw=dw)
         else:
+            # make the Euphonc.QpointPhononModes object, frequencies default to meV (good)
+            euqpm = EuQpointPhononModes(self.data.crystal, qωε.Q, qωε.ω, qωε.ε)
             # using InterpolationData.calculate_structure_factor
             # which only allows a limited number of keyword arguments
-            sf_keywords = ('calc_bose',)
+            sf_keywords = ('dw',)
             sf_dict = {k: kwargs[k] for k in sf_keywords if k in kwargs}
-            sf = self.data.calculate_structure_factor(self.scattering_lengths, **sf_dict)
+            sf = euqpm.calculate_structure_factor(self.scattering_lengths, **sf_dict)
         return sf
 
-    def dw(self, q_hkl, T=0):
+    def dw(self, q_hkl, temperature=0):
         """Calculates the Debye-Waller factor using the Brillouin zone grid."""
-        DWfactor = self.grid.debye_waller(q_hkl,
-                                          self.data.ion_mass.to('meV*s**2/angstrom**2').magnitude,
-                                          T)
-        return DWfactor
+        meVs2A2 = self.data.crystal.atom_mass.to('meV*s**2/angstrom**2').magnitude
+        return self.grid.debye_waller(q_hkl, meVs2A2, temperature)
 
-    def _calculate_structure_factor(self, T=5.0, scale=1.0, dw_data=None):
+    def _calculate_structure_factor(self, qpm, temperature=5.0, scale=1.0, dw=None):
             """
             Calculate the one phonon inelastic scattering at each q-point
             See M. Dove Structure and Dynamics Pg. 226
@@ -248,53 +257,46 @@ class BrEu:
             sf : (n_qpts, n_branches) float ndarray
                 The structure factor for each q-point and phonon branch
             """
-            sl = [self.scattering_lengths[x] for x in self.data.ion_type]
+            sl = [self.scattering_lengths[x] for x in self.data.crystal.atom_type]
+            if not isinstance(sl, np.ndarray):
+                sl = np.array(sl)
+            if not isinstance(qpm, BrQωε):
+                raise Exception('Incorrect input for frequencies and eigenvectors')
 
-
-            freqs = self.data._freqs # abuse Euphonic to get the right units
-            ion_mass = self.data._ion_mass # ditto
-            sl = (sl*ureg('fm').to('bohr')).magnitude
+            freqs = qpm.ω * ureg('meV').to('hartree').magnitude # from meV to Hartree
+            mass = self.data.crystal.atom_mass.to('unified_atomic_mass_unit').magnitude
+            sl = sl*ureg('fm').to('bohr').magnitude
 
             # Calculate normalisation factor
-            norm_factor = sl/np.sqrt(ion_mass)
+            norm_factor = sl/np.sqrt(mass)
 
             # Calculate the exponential factor for all ions and q-points
             # ion_r in fractional coords, so Qdotr = 2pi*qh*rx + 2pi*qk*ry...
-            exp_factor = np.exp(1J*2*np.pi*np.einsum('ij,kj->ik',
-
-                                                       self.data.qpts, self.data.ion_r))
+            # TODO FIXME are Q and r sure to be expressed in the same lattice?
+            exp_factor = np.exp(1J*2*np.pi*np.einsum('ij,kj->ik', qpm.Q, self.data.crystal.atom_r))
 
             # brille prefers eigenvectors in units of the lattice, so we don't need
             # to modify the units of Q
 
             # Calculate dot product of Q and eigenvectors for all branches, ions
             # and q-points
-            eigenv_dot_q = 2*np.pi*np.einsum('ijkl,il->ijk', np.conj(self.data.eigenvecs), self.data.qpts)
+            εdotQ = 2*np.pi*np.einsum('ijkl,il->ijk', np.conj(qpm.ε), qpm.Q)
 
             # Calculate Debye-Waller factors
-            if dw_data:
-                if dw_data.n_ions != self.data.n_ions:
-
-                    raise Exception((
-                        'The Data object used as dw_data is not compatible with the'
-                        ' object that calculate_structure_factor has been called on'
-                        ' (they have a different number of ions). Is dw_data '
-                        'correct?'))
-                dw = dw_data._dw_coeff(T)
-                dw_factor = np.exp(-np.einsum('jkl,ik,il->ij', dw, self.data.qpts, self.data.qpts)/2)
-                exp_factor *= dw_factor
+            if dw:
+                exp_factor *= self.debye_waller(qpm.Q, temperature)
 
             # Multiply Q.eigenvector, exp factor and normalisation factor
-            term = np.einsum('ijk,ik,k->ij', eigenv_dot_q, exp_factor, norm_factor)
+            term = np.einsum('ijk,ik,k->ij', εdotQ, exp_factor, norm_factor)
 
             # Take mod squared and divide by frequency to get intensity
             sf = np.absolute(term*np.conj(term))/np.absolute(freqs)
 
             sf = np.real(sf*scale)
 
-            return sf
+            return EuStructureFactor(self.data.crystal, qpm.Q, freqs*ureg('hartree'), sf*ureg('bohr**2'), temperature=temperature*ureg('kelvin'))
 
-    def w_q(self, q_pt, moveinto=True, interpolate=True, threads=-1, **kwargs):
+    def QpointPhononModes(self, q_pt, moveinto=True, interpolate=True, threads=-1, **kwds):
         """Calculate ωᵢ(Q) where Q = (q_h,q_k,q_l)."""
         if interpolate:
             # Interpolate the previously-stored eigen values/vectors for each Q
@@ -303,19 +305,22 @@ class BrEu:
             # first entry a (n_pt, n_br, 1) values array and the second a
             # (n_pt, n_br, n_io, 3) eigenvectors array
             frqs, vecs = self.grid.ir_interpolate_at(q_pt, self.parallel, threads, not moveinto)
-            n_pt = q_pt.shape[0]
-            # Store all information in the Euphonic Data object
-            self.data.n_qpts = n_pt
-            self.data.qpts = q_pt # no lattice conversion since we use internal Structure Factor calculation
-            self.data._reduced_freqs = np.squeeze(frqs) # Euphonic expects this to be (n_pt, n_br)
-            self.data._reduced_eigenvecs = vecs # already (n_pt, n_br, n_io, 3)
-            self.data._qpts_i = np.arange(n_pt, dtype=np.int32)
+            frqs = np.squeeze(frqs) # go back to (n_pt, n_br)
         else:
-            cfp_keywords = ('asr', 'precondition', 'dipole', 'eta_scale'
-                            'splitting', 'reduce_qpts', 'use_c', 'n_threads')
-            cfp_dict = {k: kwargs[k] for k in cfp_keywords if k in kwargs}
-            self.data.calculate_fine_phonons(self.brspgl.conventional_to_input_Q(q_pt), **cfp_dict)
-        return self.data.freqs # now a property, handles unit conversion
+            cfp_kwds = ('asr', 'dipole', 'eta_scale', 'splitting',
+                        'insert_gamma', 'reduce_qpts', 'fall_back_on_python')
+            cfp_dict = {k: kwds[k] for k in cfp_kwds if k in kwds}
+            cfp_dict['use_c'] = kwds.get('use_c', parallel)
+            if cfp_dict['use_c']:
+                cfp_dict['n_threads'] = kwds.get('n_threads', half_cpu_count())
+            euqpm = self.data.calculate_qpoint_phonon_modes(self.brspgl.conventional_to_input_Q(q_pt), **cfp_dict)
+            frqs = euqpm.frequencies
+            vecs = euqpm.eigenvectors
+        return BrQωε(q_pt, frqs, vecs)
+
+    def w_q(self, q_pt, **kwds):
+        qωε = self.QpointPhononModes(q_pt, **kwds)
+        return qωε.ω
 
     def __call__(self, *args, **kwargs):
         """Calculate and return Sᵢ(Q) and ωᵢ(Q) or S(Q,ω) depending on input.
@@ -330,17 +335,11 @@ class BrEu:
         if len(args) < 1:
             raise RuntimeError('At least one argument, Q, is required')
         elif len(args) is 1:
-            s_i_of_q = self.s_q(*args, **kwargs)
-            return (s_i_of_q, self.data.freqs)
+            return self.s_q(*args, **kwargs) # let the caller figure out how to handle a euphonic.StructureFactor
         elif len(args) is 2:
             return self.s_qw(*args, kwargs) # keep kwargs as a dictionary
         else:
             raise RuntimeError('Only one or two arguments expected, (Q,) or (Q,ω), expected')
-
-    def frqs_vecs(self, q_hkl, **kwargs):
-        """Calculate and return ωᵢ(Q) and ϵᵢ(Q)."""
-        self.w_q(q_hkl, **kwargs)
-        return (self.data.freqs, self.data.eigenvecs)
 
     def s_qw(self, q_hkl, energy, p_dict):
         """Calculate S(Q,E) for Q = (q_h, q_k, q_l) and E=energy.
@@ -362,7 +361,7 @@ class BrEu:
         Functions taking a single 'param' value will use the first element in
         any non-scalar value.
         The Simple Harmonic Oscillator function looks for an additional key,
-        'T', in p_dict to optionally include the temperature.
+        'temperature', in p_dict to optionally include the temperature.
 
         Additional keys in p_dict are allowed and are passed on to Euphonic
         as keyword arguments to the calculate_structure_factor method.
@@ -373,13 +372,13 @@ class BrEu:
             res_par_tem = (p_dict['resfun'].replace(' ', '').lower(),
                            p_dict['param'])
         n_pt = energy.size
-        n_br = self.data.n_branches
+        n_br = 3*self.data.crystal.n_atoms
         # Check if we might perform the Bose factor correction twice:
         # Replicate Euphonic's behaviour of calc_bose=True by default,
         # and T=5 by default.
         if res_par_tem[0] in ('s', 'sho', 'simpleharmonicoscillator'):
             # pull out T, or 5 if it's not present
-            temp_k = p_dict.get('T', 5)
+            temp_k = p_dict.get('temperature', 5)
             # If calc_bose is present
             if 'calc_bose' in p_dict:
                 # keep T if it's True, discard T if it's False
@@ -393,15 +392,11 @@ class BrEu:
             # Finding unique points is 𝒪(q_hkl.shape[0])
             q_hkl, u_inv = np.unique(q_hkl, return_inverse=True, axis=0)
             s_i = self.s_q(q_hkl, **p_dict)[u_inv]
-            omega = (self.data.freqs.to('millielectron_volt')).magnitude[u_inv]
+            omega = (s_i.frequencies.to('millielectron_volt')).magnitude[u_inv]
         else:
             s_i = self.s_q(q_hkl, **p_dict)
-            omega = (self.data.freqs.to('millielectron_volt')).magnitude
-        # The resulting array should be (n_pt,n_br)
-        if s_i.shape[0] != n_pt or s_i.shape[1] != n_br:
-            msg = "Expected S(Q) shape ({}, {}) but got {}."
-            msg = msg.format(n_pt, n_br, s_i.shape)
-            raise Exception(msg)
+            omega = (s_i.frequencies.to('millielectron_volt')).magnitude
+        # The resulting array *is* be (n_pt,n_br)
 
         shapein = energy.shape
         energy = energy.flatten()[:, None]
@@ -410,7 +405,7 @@ class BrEu:
         # energy is (n_pt,1) [instead of (n_pt,)]
 
         # Broaden and then sum over the n_br branches
-        s_q_e = broaden_modes(energy, omega, s_i, res_par_tem).sum(1)
+        s_q_e = broaden_modes(energy, omega, s_i.structure_factors.magnitude, res_par_tem).sum(1)
         if s_q_e.shape != shapein:
             s_q_e = s_q_e.reshape(shapein)
         return s_q_e
