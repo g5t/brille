@@ -157,18 +157,6 @@ void declare_bznestq(py::module &m, const std::string &typestr){
   }, "Q"_a, "masses"_a, "Temperature_in_K"_a)
 
   // .def("__repr__",&Class::to_string)
-  //
-  // .def("multi_sort_perm",
-  //   [](Class& cobj, const double wS, const double wE, const double wV,
-  //                   const double wM, const int ewf, const int vwf){
-  //   return av2np(cobj.multi_sort_perm(wS,wE,wV,wM,ewf,vwf));
-  // }, "scalar_cost_weight"_a=1,
-  //    "eigenvector_cost_weight"_a=1,
-  //    "vector_cost_weight"_a=1,
-  //    "matrix_cost_weight"_a=1,
-  //    "eigenvector_weight_function"_a=0,
-  //    "vector_weight_function"_a=0
-  // )
   ;
 }
 

@@ -297,7 +297,7 @@ template<typename T, typename R> class PolyhedronTrellis{
   NodeContainer nodes_;
   std::array<std::vector<double>,3> boundaries_; //!< The coordinates of the Trellis intersections, which bound the Trellis nodes
 public:
-  explicit PolyhedronTrellis(const Polyhedron& polyhedron, const double max_volume);
+  explicit PolyhedronTrellis(const Polyhedron& polyhedron, const double max_volume, const bool always_triangulate=false);
   // explicit PolyhedronTrellis(const Polyhedron& polyhedron, const double max_volume){
   //   this->construct(polyhedron, max_volume);
   // }

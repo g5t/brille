@@ -16,7 +16,7 @@
 // along with brille. If not, see <https://www.gnu.org/licenses/>.            */
 
 template<class T, class R>
-PolyhedronTrellis<T,R>::PolyhedronTrellis(const Polyhedron& poly, const double max_volume):
+PolyhedronTrellis<T,R>::PolyhedronTrellis(const Polyhedron& poly, const double max_volume, const bool always_triangulate):
   polyhedron_(poly), vertices_({3,0})
 {
   // find the extents of the polyhedron
@@ -112,7 +112,7 @@ PolyhedronTrellis<T,R>::PolyhedronTrellis(const Polyhedron& poly, const double m
       tocheck = boundaries_[j][node_ijk[j]+1];
       contains_Gamma &= tocheck > 0. || approx_scalar(tocheck, 0.);
     }
-    if (node_is_cube[i] && !contains_Gamma) {
+    if (!always_triangulate && node_is_cube[i] && !contains_Gamma) {
       nodes_.push_back(CubeNode(vert_idx));
     } else {
       // This node intersects the polyhedron. First, find the interior part

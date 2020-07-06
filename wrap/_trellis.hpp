@@ -42,8 +42,8 @@ void declare_bztrellisq(py::module &m, const std::string &typestr){
   using Class = BrillouinZoneTrellis3<T,R>;
   std::string pyclass_name = std::string("BZTrellisQ")+typestr;
   py::class_<Class>(m, pyclass_name.c_str(), py::buffer_protocol(), py::dynamic_attr())
-  // Initializer (BrillouinZone, maximum node volume fraction)
-  .def(py::init<BrillouinZone,double>(), "brillouinzone"_a, "node_volume_fraction"_a=0.1)
+  // Initializer (BrillouinZone, maximum node volume fraction, always_triangulate)
+  .def(py::init<BrillouinZone,double,bool>(), "brillouinzone"_a, "node_volume_fraction"_a=0.1, "always_triangulate"_a=false)
 
   .def_property_readonly("BrillouinZone",[](const Class& cobj){return cobj.get_brillouinzone();})
 

@@ -83,7 +83,7 @@ class BrEu:
         self.scattering_lengths = scattering_lengths
         self.brspgl = BrSpgl(SPData.cell_vec.to('angstrom').magnitude, SPData.ion_r, SPData.ion_type, hall=hall)
         # Construct the BZGrid, by default using the conventional unit cell
-        grid_q = self.__define_grid_or_mesh(**kwds)
+        grid_q = self.__define_grid(**kwds)
         # Calculate ωᵢ(Q) and ⃗ϵᵢⱼ(Q), and fill the BZGrid:
         # Select only those keyword arguments which Euphonic expects:
         cfp_keywords = ('asr', 'precondition', 'set_attrs', 'dipole',
@@ -102,10 +102,10 @@ class BrEu:
         freq = self.data._freqs    # (n_pt, n_br) # can this be replaced by _reduced_freqs?
         vecs = self.data.eigenvecs # (n_pt, n_br, n_io, 3) # can this be replaced by _reduced_eigenvecs?
         vecs = degenerate_check(grid_q, freq, vecs)
-        self.sort_branches(sort, freq, vecs, weight_function=vf)
+        self._fill_grid(freq, vecs, vf=vf, sort=sort)
         self.parallel = parallel
 
-    def _fill_grid(self, freq, vecs, vf=0):
+    def _fill_grid(self, freq, vecs, vf=0, sort=False):
         n_pt = self.grid.invA.shape[0]
         n_br = self.data.n_branches
         n_io = self.data.n_ions
@@ -143,10 +143,10 @@ class BrEu:
         freq_wght = (13605.693, 0., 0.) # Rydberg/meV
         vecs_el = (0, 3*n_io, 0, 3, 0, vf) # n_scalar, n_vector, n_matrix, rotates_like (phonon eigenvectors), scalar cost function, vector cost function
         vecs_wght = (0., 1., 0.)
-        self.grid.fill(freq, freq_el, freq_wght, self.brspgl.orthogonal_to_conventional_eigenvectors(vecs), vecs_el, vecs_wght)
+        self.grid.fill(freq, freq_el, freq_wght, self.brspgl.orthogonal_to_conventional_eigenvectors(vecs), vecs_el, vecs_wght, sort)
 
 
-    def sort_branches(self, sort, frqs, vecs, energy_weight=1.0, eigenvector_weight=1.0, weight_function=0):
+    def sort_branches(self):
         """Sort the phonon branches stored at all mapped grip points.
 
         By comparing the difference in phonon branch energy and the angle
@@ -162,78 +162,32 @@ class BrEu:
             Cᵢⱼ = [energy_weight]*√(ωᵢ-ωⱼ)²
                 + [angle_weight]*acos(<ϵᵢ,ϵⱼ>/|ϵᵢ||ϵⱼ|)
 
-        The weights are both one by default but can be modified as necessary.
         """
-        self._fill_grid(frqs, vecs, vf=weight_function)
-        # Temporary stopgap: The old-way uses a method multi_sort_perm
-        # while the new way uses one called sort:
-        if sort and callable(getattr(self.grid, 'multi_sort_perm', None)):
-            # The input to sort_perm indicates what weight should be given to
-            # each part of the resultant cost matrix. In this case, each phonon
-            # branch consists of one energy, n_ions three-vectors, and no matrix;
-            # perm = self.grid.centre_sort_perm(
-            perm = self.grid.multi_sort_perm(
-                scalar_cost_weight=energy_weight,
-                vector_cost_weight=eigenvector_weight,
-                matrix_cost_weight=0,
-                vector_weight_function=weight_function)
-            # use the permutations to sort the eigenvalues and vectors
-            frqs = np.array([x[y] for (x, y) in zip(frqs, perm)])
-            vecs = np.array([x[y,:,:] for (x,y) in zip(vecs, perm)])
-            # # The gridded frequencies are (n_pt, n_br, 1)
-            # frqs = np.array([x[y,:] for (x, y) in zip(self.grid.values, perm)])
-            # # The gridded eigenvectors are (n_pt, n_br, n_io, 3)
-            # vecs = np.array([x[y,:,:] for (x, y) in zip(self.grid.vectors, perm)])
-            self._fill_grid(frqs, vecs, vf=weight_function)
-        elif sort and callable(getattr(self.grid, 'sort', None)):
-            # self.grid.sortingstatus = self.grid.sort()
+        if sort and callable(getattr(self.grid, 'sort', None)):
             self.grid.sort()
-        return frqs, vecs
 
     # pylint: disable=c0103,w0613,no-member
-    def __define_grid_or_mesh(self, mesh=False, trellis=False, nest=False, **kwds):
+    def __define_grid(self, mesh=False, nest=False, **kwds):
         brillouin_zone = self.brspgl.get_conventional_BrillouinZone()
         if mesh:
             self.__make_mesh(brillouin_zone, **kwds)
-        elif trellis:
-            self.__make_trellis(brillouin_zone, **kwds)
         elif nest:
             self.__make_nest(brillouin_zone, **kwds)
         else:
-            self.__make_grid(brillouin_zone, **kwds)
+            self.__make_trellis(brillouin_zone, **kwds)
+
         # We need to make sure that we pass gridded Q points in the primitive
         # lattice, since that is what Euphonic expects:
         return self.brspgl.conventional_to_input_Q(self.grid.rlu)
 
-    def __make_grid(self, bz, halfN=None, step=None, units='rlu', **kwds):
-        if halfN is not None:
-            # pybind is supposed to be able to convert to the C-expected type
-            # automatically, but it can't distinguish between the call requiring
-            # 'size_t' and 'double' so we need to help it out.
-            if isinstance(halfN, (tuple, list)):
-                halfN = np.array(halfN)
-            if not isinstance(halfN, np.ndarray):
-                raise Exception("'halfN' must be a tuple, list, or ndarray")
-            halfN = halfN.astype('uint64')
-            self.grid = br.BZGridQdc(bz, halfN)
-        elif step is not None:
-            if isinstance(step, ureg.Quantity):
-                step = (step.to('angstrom')).magnitude
-                isrlu = False
-            else:
-                isrlu = units.lower() == 'rlu'
-            self.grid = br.BZGridQdc(bz, step, isrlu)
-        else:
-            raise Exception("keyword 'halfN' or 'step' required")
-
     def __make_mesh(self, bz, max_size=-1, max_points=-1, num_levels=3, **kwds):
         self.grid = br.BZMeshQdc(bz, max_size, num_levels, max_points)
 
-    def __make_trellis(self, bz, max_volume=None, number_density=None, **kwds):
+    def __make_trellis(self, bz, max_volume=None, number_density=None, always_triangulate=False, **kwds):
         if max_volume is not None:
-            self.grid = br.BZTrellisQdc(bz, max_volume)
-        elif number_density is not None:
-            self.grid = br.BZTrellisQdc(bz, number_density)
+            self.grid = br.BZTrellisQdc(bz, max_volume, always_triangulate)
+        #elif number_density is not None:
+        #    self.grid = br.BZTrellisQdc(bz, number_density)
         else:
             raise Exception("keyword 'max_volume' or 'number_density' required")
 
