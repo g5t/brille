@@ -5,6 +5,7 @@ import spglib
 import brille as b
 
 from euphonic import Crystal as EuCrystal
+from euphonic import StructureFactor as EuStructureFactor
 from euphonic import ureg
 
 class BrCell:
@@ -163,7 +164,67 @@ class BrSpgl:
         return np.einsum('ba,ijkb->ijka', self.get_conventional_basis(), vecs)
 
 class BrQωε:
-    def __init__(self, Q, ω, ε):
+    def __init__(self, Q, ω, ε, Wd=None, T=None):
         self.Q = Q
         self.ω = ω.to('meV').magnitude if isinstance(ω, ureg.Quantity) else ω
         self.ε = ε
+        self.Wd = Wd
+        self.T = T
+        self.has_debye_waller = True if Wd else False
+
+    def calculate_structure_factor(self, crystal, scattering_lengths, **kwargs):
+        """
+        Calculate the one phonon inelastic neutron scattering
+        dynamic structure factor at each stored Q point.
+        Adapted from the same-named method in euphonic.
+
+        Parameters
+        ----------
+        crystal : euphonic.Crystal
+            A valid Crystal object to provide atoms, masses, and positions,
+            needed to produce output object
+        scattering_lengths : dictionary of str : float
+            Dictionary of spin and isotope averaged coherent scattering lengths
+            for each element in the structure, with lengths in fm.
+
+        """
+        if not isinstance(crystal, EuCrystal):
+            raise Exception('A Euphonic Crystal object is requred input')
+
+
+        mass = crystal.atom_mass.to('unified_atomic_mass_unit').magnitude
+
+        sl = np.array([scattering_lengths[x] for x in crystal.atom_type])
+        if isinstance(sl, ureg.Quantity):
+            sl = sl.to('bohr').magnitude
+        else:
+            sl = sl * ureg('fm').to('bohr').magnitude
+
+        normalisation = sl/np.sqrt(mass)
+        # Calculate the exponential factor for all ions and q-points
+        # atom_r in fractional coords, so q⋅r = 2π*qh*rx + 2π*qk*ry...
+        # TODO FIXME are Q and r sure to be expressed in the same lattice?
+        # result is (n_q, n_atom)
+        exp_qdotr = np.exp(2J*np.pi*np.einsum('ij,kj->ik', self.Q, crystal.atom_r))
+
+        # calculate eigenvector polarisation factor
+        # result is (n_q, 3*n_atom, n_atom)
+        εdotq = 2*np.pi*np.einsum('ijkl,il->ijk', np.conj(self.ε), self.Q)
+
+        if self.has_debye_waller:
+            exp_qdotr *= self.Wd # not checking its size is bad form, but this shouldn't be called from anywhere else
+
+        # combine scattering length, mass normalisation, polarisation,
+        # structure factor, and, optionally, the Debye-Waller factor
+        # result is (n_q, 3*n_atom)
+        ff = np.einsum('ijk,ik,k->ij', εdotq, exp_qdotr, normalisation)
+
+        # convert ω fro meV to Hartree
+        frqs = self.ω * ureg('meV').to('hartree')
+        # find scale_factor*|FF|²/ω
+        # result is (n_q, 3*n_atom)
+        sf = np.real(np.absolute(ff * np.conj(ff))/np.absolute(frqs.magnitude))
+
+        temperature = self.T * ureg('kelvin') if self.T else None
+
+        return EuStructureFactor(crystal, self.Q, frqs, sf*ureg('bohr**2'), temperature=temperature)

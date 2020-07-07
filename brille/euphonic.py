@@ -23,18 +23,13 @@ Q points.
 import numpy as np
 import spglib
 
-from scipy import special
-from scipy.stats import norm, cauchy
-
 from euphonic import ForceConstants
 from euphonic import QpointPhononModes as EuQpointPhononModes
-from euphonic import StructureFactor as EuStructureFactor
-from euphonic import ureg    # avoid creating a second Pint UnitRegistry
 
-import brille as br
+import brille
 from brille.spglib import BrSpgl, BrQωε
 from brille.evn import degenerate_check
-
+from brille.utilities import broaden_modes, half_cpu_count
 
 class BrEu:
     """
@@ -190,137 +185,23 @@ class BrEu:
         return self.brspgl.conventional_to_input_Q(self.grid.rlu)
 
     def __make_mesh(self, bz, max_size=-1, max_points=-1, num_levels=3, **kwds):
-        self.grid = br.BZMeshQdc(bz, max_size, num_levels, max_points)
+        self.grid = brille.BZMeshQdc(bz, max_size, num_levels, max_points)
 
     def __make_trellis(self, bz, max_volume=None, number_density=None, always_triangulate=False, **kwds):
         if max_volume is not None:
-            self.grid = br.BZTrellisQdc(bz, max_volume, always_triangulate)
+            self.grid = brille.BZTrellisQdc(bz, max_volume, always_triangulate)
         #elif number_density is not None:
-        #    self.grid = br.BZTrellisQdc(bz, number_density)
+        #    self.grid = brille.BZTrellisQdc(bz, number_density)
         else:
             raise Exception("keyword 'max_volume' or 'number_density' required")
 
     def __make_nest(self, bz, max_branchings=5, max_volume=None, number_density=None, **kwds):
         if max_volume is not None:
-            self.grid = br.BZNestQdc(bz, max_volume, max_branchings)
+            self.grid = brille.BZNestQdc(bz, max_volume, max_branchings)
         elif number_density is not None:
-            self.grid = br.BZNestQdc(bz, number_density, max_branchings)
+            self.grid = brille.BZNestQdc(bz, number_density, max_branchings)
         else:
             raise Exception("keyword 'max_volume' or 'number_density' required")
-
-    def s_q(self, q_hkl, interpolate=True,  temperature=5.0, scale=1.0, dw=None, **kwargs):
-        """Calculate Sᵢ(Q) where Q = (q_h,q_k,q_l)."""
-        qωε = self.QpointPhononModes(q_hkl, interpolate=interpolate, **kwargs)
-        # Finally calculate Sᵢ(Q)
-        if interpolate:
-            sf = self._calculate_structure_factor(qωε, temperature=temperature, scale=scale, dw=dw)
-        else:
-            # make the Euphonc.QpointPhononModes object, frequencies default to meV (good)
-            euqpm = EuQpointPhononModes(self.data.crystal, qωε.Q, qωε.ω, qωε.ε)
-            # using InterpolationData.calculate_structure_factor
-            # which only allows a limited number of keyword arguments
-            sf_keywords = ('dw',)
-            sf_dict = {k: kwargs[k] for k in sf_keywords if k in kwargs}
-            sf = euqpm.calculate_structure_factor(self.scattering_lengths, **sf_dict)
-        return sf
-
-    def dw(self, q_hkl, temperature=0):
-        """Calculates the Debye-Waller factor using the Brillouin zone grid."""
-        meVs2A2 = self.data.crystal.atom_mass.to('meV*s**2/angstrom**2').magnitude
-        return self.grid.debye_waller(q_hkl, meVs2A2, temperature)
-
-    def _calculate_structure_factor(self, qpm, temperature=5.0, scale=1.0, dw=None):
-            """
-            Calculate the one phonon inelastic scattering at each q-point
-            See M. Dove Structure and Dynamics Pg. 226
-
-            Parameters
-            ----------
-            scattering_lengths : dictionary
-                Dictionary of spin and isotope averaged coherent scattering legnths
-                for each element in the structure in fm e.g.
-                {'O': 5.803, 'Zn': 5.680}
-            T : float, optional, default 5.0
-                The temperature in Kelvin to use when calculating the Bose and
-                Debye-Waller factors
-            scale : float, optional, default 1.0
-                Apply a multiplicative factor to the final structure factor.
-            calc_bose : boolean, optional, default True
-                Whether to calculate and apply the Bose factor
-            dw_data : InterpolationData or PhononData object
-                A PhononData or InterpolationData object with
-                frequencies/eigenvectors calculated on a q-grid over which the
-                Debye-Waller factor will be calculated
-
-            Returns
-            -------
-            sf : (n_qpts, n_branches) float ndarray
-                The structure factor for each q-point and phonon branch
-            """
-            sl = [self.scattering_lengths[x] for x in self.data.crystal.atom_type]
-            if not isinstance(sl, np.ndarray):
-                sl = np.array(sl)
-            if not isinstance(qpm, BrQωε):
-                raise Exception('Incorrect input for frequencies and eigenvectors')
-
-            freqs = qpm.ω * ureg('meV').to('hartree').magnitude # from meV to Hartree
-            mass = self.data.crystal.atom_mass.to('unified_atomic_mass_unit').magnitude
-            sl = sl*ureg('fm').to('bohr').magnitude
-
-            # Calculate normalisation factor
-            norm_factor = sl/np.sqrt(mass)
-
-            # Calculate the exponential factor for all ions and q-points
-            # ion_r in fractional coords, so Qdotr = 2pi*qh*rx + 2pi*qk*ry...
-            # TODO FIXME are Q and r sure to be expressed in the same lattice?
-            exp_factor = np.exp(1J*2*np.pi*np.einsum('ij,kj->ik', qpm.Q, self.data.crystal.atom_r))
-
-            # brille prefers eigenvectors in units of the lattice, so we don't need
-            # to modify the units of Q
-
-            # Calculate dot product of Q and eigenvectors for all branches, ions
-            # and q-points
-            εdotQ = 2*np.pi*np.einsum('ijkl,il->ijk', np.conj(qpm.ε), qpm.Q)
-
-            # Calculate Debye-Waller factors
-            if dw:
-                exp_factor *= self.debye_waller(qpm.Q, temperature)
-
-            # Multiply Q.eigenvector, exp factor and normalisation factor
-            term = np.einsum('ijk,ik,k->ij', εdotQ, exp_factor, norm_factor)
-
-            # Take mod squared and divide by frequency to get intensity
-            sf = np.absolute(term*np.conj(term))/np.absolute(freqs)
-
-            sf = np.real(sf*scale)
-
-            return EuStructureFactor(self.data.crystal, qpm.Q, freqs*ureg('hartree'), sf*ureg('bohr**2'), temperature=temperature*ureg('kelvin'))
-
-    def QpointPhononModes(self, q_pt, moveinto=True, interpolate=True, threads=-1, **kwds):
-        """Calculate ωᵢ(Q) where Q = (q_h,q_k,q_l)."""
-        if interpolate:
-            # Interpolate the previously-stored eigen values/vectors for each Q
-            # each grid point has a (n_br, 1) values array and a (n_br, n_io, 3)
-            # eigenvectors array and interpolate_at returns a tuple with the
-            # first entry a (n_pt, n_br, 1) values array and the second a
-            # (n_pt, n_br, n_io, 3) eigenvectors array
-            frqs, vecs = self.grid.ir_interpolate_at(q_pt, self.parallel, threads, not moveinto)
-            frqs = np.squeeze(frqs) # go back to (n_pt, n_br)
-        else:
-            cfp_kwds = ('asr', 'dipole', 'eta_scale', 'splitting',
-                        'insert_gamma', 'reduce_qpts', 'fall_back_on_python')
-            cfp_dict = {k: kwds[k] for k in cfp_kwds if k in kwds}
-            cfp_dict['use_c'] = kwds.get('use_c', parallel)
-            if cfp_dict['use_c']:
-                cfp_dict['n_threads'] = kwds.get('n_threads', half_cpu_count())
-            euqpm = self.data.calculate_qpoint_phonon_modes(self.brspgl.conventional_to_input_Q(q_pt), **cfp_dict)
-            frqs = euqpm.frequencies
-            vecs = euqpm.eigenvectors
-        return BrQωε(q_pt, frqs, vecs)
-
-    def w_q(self, q_pt, **kwds):
-        qωε = self.QpointPhononModes(q_pt, **kwds)
-        return qωε.ω
 
     def __call__(self, *args, **kwargs):
         """Calculate and return Sᵢ(Q) and ωᵢ(Q) or S(Q,ω) depending on input.
@@ -340,6 +221,59 @@ class BrEu:
             return self.s_qw(*args, kwargs) # keep kwargs as a dictionary
         else:
             raise RuntimeError('Only one or two arguments expected, (Q,) or (Q,ω), expected')
+
+
+    def s_q(self, q_hkl, interpolate=True, **kwargs):
+        """Calculate Sᵢ(Q) where Q = (q_h,q_k,q_l)."""
+        qωε = self.QpointPhononModes(q_hkl, **kwargs)
+        # Finally calculate Sᵢ(Q)
+        if interpolate:
+            sf = qωε.calculate_structure_factor(self.data.crystal, self.scattering_lengths, **kwargs)
+        else:
+            # make the Euphonc.QpointPhononModes object, frequencies default to meV (good)
+            euqpm = EuQpointPhononModes(self.data.crystal, qωε.Q, qωε.ω, qωε.ε)
+            # using InterpolationData.calculate_structure_factor
+            # which only allows a limited number of keyword arguments
+            sf_keywords = ('dw',)
+            sf_dict = {k: kwargs[k] for k in sf_keywords if k in kwargs}
+            sf = euqpm.calculate_structure_factor(self.scattering_lengths, **sf_dict)
+        return sf
+
+    def dw(self, q_hkl, temperature=0):
+        """Calculates the Debye-Waller factor using the Brillouin zone grid."""
+        meVs2A2 = self.data.crystal.atom_mass.to('meV*s**2/angstrom**2').magnitude
+        return self.grid.debye_waller(q_hkl, meVs2A2, temperature)
+
+    def QpointPhononModes(self, q_pt, moveinto=True, interpolate=True, dw=None, temperature=5., threads=-1, **kwds):
+        """Calculate ωᵢ(Q) where Q = (q_h,q_k,q_l)."""
+        if interpolate:
+            # Interpolate the previously-stored eigen values/vectors for each Q
+            # each grid point has a (n_br, 1) values array and a (n_br, n_io, 3)
+            # eigenvectors array and interpolate_at returns a tuple with the
+            # first entry a (n_pt, n_br, 1) values array and the second a
+            # (n_pt, n_br, n_io, 3) eigenvectors array
+            if dw:
+                mass = self.data.crystal.atom_mass.to('unified_atomic_mass_unit').magnitude
+                frqs, vecs, Wd = self.grid.ir_interpolate_at_dw(q_pt, mass , temperature, self.parallel, threads, not moveinto)
+                return BrQωε(q_pt, np.squeeze(frqs), vecs, Wd, temperature)
+            else:
+                frqs, vecs = self.grid.ir_interpolate_at(q_pt, self.parallel, threads, not moveinto)
+                return BrQωε(q_pt, np.squeeze(frqs), vecs)
+        else:
+            cfp_kwds = ('asr', 'dipole', 'eta_scale', 'splitting',
+                        'insert_gamma', 'reduce_qpts', 'fall_back_on_python')
+            cfp_dict = {k: kwds[k] for k in cfp_kwds if k in kwds}
+            cfp_dict['use_c'] = kwds.get('use_c', parallel)
+            if cfp_dict['use_c']:
+                cfp_dict['n_threads'] = kwds.get('n_threads', half_cpu_count())
+            euqpm = self.data.calculate_qpoint_phonon_modes(self.brspgl.conventional_to_input_Q(q_pt), **cfp_dict)
+            frqs = euqpm.frequencies
+            vecs = euqpm.eigenvectors
+            return BrQωε(q_pt, euqpm.frequencies, euqpm.eigenvectors)
+
+    def w_q(self, q_pt, **kwds):
+        qωε = self.QpointPhononModes(q_pt, **kwds)
+        return qωε.ω
 
     def s_qw(self, q_hkl, energy, p_dict):
         """Calculate S(Q,E) for Q = (q_h, q_k, q_l) and E=energy.
@@ -409,149 +343,3 @@ class BrEu:
         if s_q_e.shape != shapein:
             s_q_e = s_q_e.reshape(shapein)
         return s_q_e
-
-
-def broaden_modes(energy, omega, s_i, res_par_tem):
-    """Compute S(Q,E) for a number of dispersion relations and intensities.
-
-    Given any number of dispersion relations, ω(Q), and the intensities of the
-    modes which they represent, S(Q), plus energy-broadening information in
-    the form of a function name plus parameters (if required), calculate S(Q,E)
-    at the provided energy positions.
-
-    The energy positions must have shape (Npoints,).
-    The dispersion and intensities must have been precalculated and should have
-    shape similar to (Npoints, Nmodes). This function calls one of five
-    available broadening functions, a simple harmonic oscillator, gaussian,
-    lorentzian, voigt, or delta function.
-    The retuned S(Q,E) array will have shape (Npoints, Nmodes).
-    """
-    if res_par_tem[0] in ('s', 'sho', 'simpleharmonicoscillator'):
-        s_q_e = sho(energy, omega, s_i, res_par_tem[1], res_par_tem[2])
-    elif res_par_tem[0] in ('g', 'gauss', 'gaussian'):
-        s_q_e = gaussian(energy, omega, s_i, res_par_tem[1])
-    elif res_par_tem[0] in ('l', 'lor', 'lorentz', 'lorentzian'):
-        s_q_e = lorentzian(energy, omega, s_i, res_par_tem[1])
-    elif res_par_tem[0] in ('v', 'voi', 'voigt'):
-        s_q_e = voigt(energy, omega, s_i, res_par_tem[1])
-    elif res_par_tem[0] in ('d', 'del', 'delta'):
-        s_q_e = delta(energy, omega, s_i)
-    else:
-        print("Unknown function {}".format(res_par_tem[0]))
-        s_q_e = s_i
-    return s_q_e
-
-
-def delta(x_0, x_i, y_i):
-    """
-    Compute the δ-function.
-
-    y₀ = yᵢ×δ(x₀-xᵢ)
-    """
-    y_0 = np.zeros(y_i.shape, dtype=y_i.dtype)
-    # y_0 = np.zeros_like(y_i)
-    y_0[x_0 == x_i] = y_i[x_0 == x_i]
-    return y_0
-
-
-def gaussian(x_0, x_i, y_i, fwhm):
-    """Compute the normal distribution with full-width-at-half-maximum fwhm."""
-    if not np.isscalar(fwhm):
-        fwhm = fwhm[0]
-    sigma = fwhm/np.sqrt(np.log(256))
-    z_0 = (x_0-x_i)/sigma
-    y_0 = norm.pdf(z_0) * y_i
-    return y_0
-
-
-def lorentzian(x_0, x_i, y_i, fwhm):
-    """Compute the Cauchy distribution with full-width-at-half-maximum fwhm."""
-    if not np.isscalar(fwhm):
-        fwhm = fwhm[0]
-    gamma = fwhm/2
-    z_0 = (x_0-x_i)/gamma
-    y_0 = cauchy.pdf(z_0) * y_i
-    return y_0
-
-
-def voigt(x_0, x_i, y_i, params):
-    """Compute the convolution of a normal and Cauchy distribution.
-
-    The Voigt function is the exact convolution of a normal distribution (a
-    Gaussian) with full-width-at-half-max gᶠʷʰᵐ and a Cauchy distribution
-    (a Lorentzian) with full-with-at-half-max lᶠʷʰᵐ. Computing the Voigt
-    function exactly is computationally expensive, but it can be approximated
-    to (almost always nearly) machine precision quickly using the [Faddeeva
-    distribution](http://ab-initio.mit.edu/wiki/index.php/Faddeeva_Package).
-
-    The Voigt distribution is the real part of the Faddeeva distribution,
-    given an appropriate rescaling of the parameters. See, e.g.,
-    https://en.wikipedia.org/wiki/Voigt_profile.
-    """
-    if np.isscalar(params):
-        g_fwhm = params
-        l_fwhm = 0
-    else:
-        g_fwhm = params[0]
-        l_fwhm = params[1]
-    if l_fwhm == 0:
-        return gaussian(x_0, x_i, y_i, g_fwhm)
-    if g_fwhm == 0:
-        return lorentzian(x_0, x_i, y_i, l_fwhm)
-
-    area = np.sqrt(np.log(2)/np.pi)
-    gamma = g_fwhm/2
-    real_z = np.sqrt(np.log(2))*(x_0-x_i)/gamma
-    imag_z = np.sqrt(np.log(2))*np.abs(l_fwhm/g_fwhm)
-    # pylint: disable=no-member
-    y_0 = area*np.real(special.wofz(real_z + 1j*imag_z))/gamma
-    return y_0
-
-
-def sho(x_0, x_i, y_i, fwhm, t_k):
-    """Compute the Simple-Harmonic-Oscillator distribution."""
-    # (partly) ensure that all inputs have the same shape:
-    if np.isscalar(fwhm):
-        fwhm = fwhm * np.ones(y_i.shape)
-    if np.isscalar(t_k):
-        t_k = t_k * np.ones(y_i.shape)
-    if x_0.ndim < x_i.ndim or (x_0.shape[1] == 1 and x_i.shape[1] > 1):
-        x_0 = np.repeat(x_0, x_i.shape[1], 1)
-    # include the Bose factor if the temperature is non-zero
-    bose = x_0 / (1-np.exp(-11.602*x_0/t_k))
-    bose[t_k == 0] = 1.0
-    # We need x₀² the same shape as xᵢ
-    x_02 = x_0**2
-    # and to ensure that only valid (finite) modes are included
-    flag = (x_i != 0) * np.isfinite(x_i)
-    # create an output array
-    y_0 = np.zeros(y_i.shape)
-    # flatten everything so that we can use logical indexing
-    # keeping the original output shape
-    outshape = y_0.shape
-    bose = bose.flatten()
-    fwhm = fwhm.flatten()
-    y_0 = y_0.flatten()
-    x_i = x_i.flatten()
-    y_i = y_i.flatten()
-    x_02 = x_02.flatten()
-    flag = flag.flatten()
-    # and actually calculate the distribution
-    part1 = bose[flag]*(4/np.pi)*fwhm[flag]*x_i[flag]*y_i[flag]
-    part2 = ((x_02[flag]-x_i[flag]**2)**2 + 4*fwhm[flag]**2*x_02[flag])
-    # if the brille object is holding complex values (it is) then its returned
-    # interpolated values are all complex too, even, e.g., energies which are
-    # purely real with identically zero imaginary components.
-    # The division of two purely-real complex numbers in Python will annoyingly
-    # raise a warning about discarding the imaginary part. So preempt it here.
-    if not np.isclose(np.sum(np.abs(np.imag(part1))+np.abs(np.imag(part2))), 0.):
-        raise RuntimeError('Unexpected imaginary components.')
-    y_0[flag] = np.real(part1)/np.real(part2)
-    return y_0.reshape(outshape)
-
-def half_cpu_count():
-    import os
-    count = os.cpu_count()
-    if 'sched_get_affinity' in dir(os):
-        count = len(os.sched_getaffinity(0))
-    return count//2
