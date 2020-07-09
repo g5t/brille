@@ -5,7 +5,7 @@ import numpy as np, matplotlib as mpl, matplotlib.pyplot as pp
 import brille as b, brille.plotting as bp
 from pathlib import Path
 from euphonic import ForceConstants
-from brille.euphonic import BrEu
+from brilleu import BrillEu
 
 images_dir = os.path.join(os.path.dirname(__file__), 'images')
 def dirsavefig(dirname, filename, transparent=True, **kwds):
@@ -49,7 +49,7 @@ def centre_to_corner(X):
 # Construct a brille BZTrellisQdc object from a Euphonic object.
 # use_c=False ensures the Euphonic C module is *not* used.
 # but *need* to use the brille C++ module, and parallel=True ensures we do so with OpenMP
-nacl = BrEu(getForceConstants('NaCl'), trellis=True, max_volume=1e-5, parallel=True, use_c=False)
+nacl = BrillEu(getForceConstants('NaCl'), trellis=True, max_volume=1e-5, parallel=True, use_c=False)
 
 # Define a path through reciprocal space from (000) to (123)
 xi = np.linspace(0, 1, 100)
