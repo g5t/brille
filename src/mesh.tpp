@@ -29,7 +29,7 @@ Mesh3<T,S>::check_before_interpolating(const ArrayVector<R>& x) const{
 //! Perform linear interpolating at the specified points in the mesh's orthonormal frame
 template<class T, class S> template<typename R>
 std::tuple<ArrayVector<T>,ArrayVector<S>>
-Mesh3<T,S>::interpolate_at(const ArrayVector<R>& x){
+Mesh3<T,S>::interpolate_at(const ArrayVector<R>& x) const {
   this->check_before_interpolating(x);
   ArrayVector<T> vals(data_.values().numel(), x.size());
   ArrayVector<S> vecs(data_.vectors().numel(), x.size());
@@ -49,7 +49,7 @@ Mesh3<T,S>::interpolate_at(const ArrayVector<R>& x){
 }
 template<class T, class S> template<typename R>
 std::tuple<ArrayVector<T>,ArrayVector<S>>
-Mesh3<T,S>::parallel_interpolate_at(const ArrayVector<R>& x, const int threads){
+Mesh3<T,S>::parallel_interpolate_at(const ArrayVector<R>& x, const int threads) const {
   omp_set_num_threads( (threads > 0) ? threads : omp_get_max_threads() );
   this->check_before_interpolating(x);
   // shared between threads

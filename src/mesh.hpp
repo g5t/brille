@@ -81,14 +81,14 @@ public:
   //! Perform linear interpolation at the specified Reciprocal lattice points
   template<typename R>
   std::tuple<ArrayVector<T>,ArrayVector<S>>
-  interpolate_at(const LQVec<R>& x) {return this->interpolate_at(x.get_xyz());}
+  interpolate_at(const LQVec<R>& x) const {return this->interpolate_at(x.get_xyz());}
   //! Perform linear interpolating at the specified points in the mesh's orthonormal frame
   template<typename R>
   std::tuple<ArrayVector<T>,ArrayVector<S>>
-  interpolate_at(const ArrayVector<R>& x);
+  interpolate_at(const ArrayVector<R>& x) const;
   template<typename R>
   std::tuple<ArrayVector<T>,ArrayVector<S>>
-  parallel_interpolate_at(const ArrayVector<R>& x, const int nthreads);
+  parallel_interpolate_at(const ArrayVector<R>& x, const int nthreads) const;
   //! Return the neighbours for which a passed boolean array holds true
   template<typename R> std::vector<size_t> which_neighbours(const std::vector<R>& t, const R value, const size_t idx) const;
   std::string to_string(void) const {
